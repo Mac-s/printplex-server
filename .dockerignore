@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+.git/
+data/
+*.md
+docker-compose.yml

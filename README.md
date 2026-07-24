@@ -8,10 +8,51 @@ l'expose via une API REST ; les apps macOS/iOS et une interface web deviennent d
 
 - [x] **Phase 1 — `PrintPlexCore`** : extraction du cœur métier de l'app macOS en package SwiftPM
       portable (macOS + Linux), découplé de SwiftData, SwiftUI et AppKit.
-- [ ] **Phase 2 — Serveur** : exécutable Vapor/Hummingbird (scan + SQLite + API REST + SSE + vignettes),
-      conteneurisé via docker-compose.
+- [x] **Phase 2 — Serveur** : exécutable Vapor (`PrintPlexServerApp`) : scan + SQLite (Fluent) +
+      API REST + SSE + vignettes, conteneurisé via docker-compose.
 - [ ] **Phase 3 — Client macOS** : l'app existante consomme l'API au lieu de scanner localement.
 - [ ] **Phase 4 — iOS & web**.
+
+## API du serveur
+
+| Méthode | Route | Description |
+|---|---|---|
+| GET | `/health` | Sonde de vie (utilisée par le healthcheck Docker) |
+| GET | `/api/projects` | Liste des projets (triés par dernière modification) |
+| GET | `/api/projects/:id` | Détail d'un projet avec ses fichiers |
+| PATCH | `/api/projects/:id` | Met à jour les métadonnées (DB **et** `info.json` — la bibliothèque reste la source de vérité) |
+| GET | `/api/projects/:id/estimate` | Estimation agrégée des pièces 3MF parsées |
+| GET | `/api/projects/:id/shopify` | Produit Shopify correspondant (ID explicite ou match par nom) |
+| GET | `/api/files/unsorted` | Fichiers orphelins (hors projet) |
+| GET | `/api/files/:id` | Détail d'un fichier |
+| GET | `/api/files/:id/download` | Téléchargement (chemin validé sous la racine bibliothèque) |
+| GET | `/api/files/:id/thumbnail` | Vignette : image servie telle quelle, ou PNG embarqué du .3mf (extrait + mis en cache) |
+| GET | `/api/files/:id/estimate` | Estimation d'impression (`?printerId=&materialId=&layerHeightMM=&infillPercent=&shellCount=&manualWork=`) |
+| POST | `/api/scan` | Déclenche un scan (`?wait=true` pour bloquer jusqu'à la fin) |
+| GET | `/api/scan/status` | État du scan + compteurs |
+| GET | `/api/scan/events` | **SSE** : progression du scan en temps réel |
+| GET | `/api/printers` · `/api/materials` | Référentiels pour les estimations (profils par défaut) |
+| GET/POST | `/api/shopify/products` · `/api/shopify/sync` | Cache produits Shopify côté serveur |
+
+Le serveur scanne au démarrage puis rescanne périodiquement (`PRINTPLEX_SCAN_INTERVAL_MIN`,
+défaut 15 min, 0 pour désactiver). Les `.3mf` nouveaux ou modifiés passent ensuite au parsing de
+maillage (volume, surface, bounding box) pour alimenter les estimations.
+
+### Variables d'environnement
+
+`PRINTPLEX_LIBRARY_PATH`, `PRINTPLEX_DATA_PATH` (SQLite + cache vignettes),
+`PRINTPLEX_SCAN_INTERVAL_MIN`, `PRINTPLEX_HOSTNAME`, `PRINTPLEX_PORT`,
+`SHOPIFY_STORE_DOMAIN`, `SHOPIFY_ACCESS_TOKEN`, `PRINTPLEX_DB_IN_MEMORY` (tests).
+
+### Lancer
+
+```bash
+# En local
+PRINTPLEX_LIBRARY_PATH=~/Ma/Bibliotheque swift run PrintPlexServerApp
+
+# En Docker
+PRINTPLEX_LIBRARY=/chemin/vers/bibliotheque docker compose up -d --build
+```
 
 ## Contenu du package
 

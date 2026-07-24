@@ -3,4 +3,4 @@
 *.xcodeproj
 xcuserdata/
 .DS_Store
-Package.resolved
+data/

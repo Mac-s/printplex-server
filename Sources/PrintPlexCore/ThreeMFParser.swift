@@ -404,6 +404,43 @@ public enum ThreeMFParser {
         )
     }
 
+    // MARK: - Embedded thumbnail extraction
+
+    /// Extracts the thumbnail PNG embedded in a .3MF archive, if any.
+    /// Slicers (BambuStudio, PrusaSlicer, Cura) store a render under Metadata/.
+    /// Replaces QuickLook on platforms that don't have it (Linux server).
+    public static func extractThumbnail(at url: URL) -> Data? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return extractThumbnail(data: data)
+    }
+
+    public static func extractThumbnail(data zipData: Data) -> Data? {
+        let zip = ZipReader(data: zipData)
+        guard let eocd = zip.findEOCD() else { return nil }
+
+        var index: [String: ZipReader.CDEntry] = [:]
+        var off = eocd.cdOffset
+        for _ in 0..<eocd.entries {
+            guard let e = zip.cdEntry(at: off) else { break }
+            index[norm(e.filename)] = e
+            off += e.totalSize
+        }
+
+        // Preferred well-known locations first, then any PNG under Metadata/,
+        // then any PNG at all.
+        let preferred = ["metadata/plate_1.png", "metadata/thumbnail.png", "thumbnail.png"]
+        for name in preferred {
+            if let entry = index[name], let data = try? zip.extract(entry) { return data }
+        }
+        let fallbacks = index.keys
+            .filter { $0.hasSuffix(".png") }
+            .sorted { ($0.hasPrefix("metadata/") ? 0 : 1, $0) < ($1.hasPrefix("metadata/") ? 0 : 1, $1) }
+        for name in fallbacks {
+            if let entry = index[name], let data = try? zip.extract(entry) { return data }
+        }
+        return nil
+    }
+
     // MARK: - Private helpers
 
     private static func norm(_ path: String) -> String {

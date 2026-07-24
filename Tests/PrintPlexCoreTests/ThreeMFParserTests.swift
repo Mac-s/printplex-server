@@ -141,6 +141,21 @@ final class ThreeMFParserTests: XCTestCase {
         XCTAssertEqual(result.plateCount, 1)
     }
 
+    func testExtractsEmbeddedThumbnail() {
+        let png = Data("fake png bytes".utf8)
+        let zip = makeStoredZip(entries: [
+            ("3D/3dmodel.model", Data(cubeModelXML.utf8)),
+            ("Metadata/plate_1.png", png),
+            ("Metadata/other.png", Data("other".utf8)),
+        ])
+        XCTAssertEqual(ThreeMFParser.extractThumbnail(data: zip), png)
+
+        let zipWithoutPNG = makeStoredZip(entries: [
+            ("3D/3dmodel.model", Data(cubeModelXML.utf8)),
+        ])
+        XCTAssertNil(ThreeMFParser.extractThumbnail(data: zipWithoutPNG))
+    }
+
     func testRejectsGarbageData() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("printplex-garbage-\(UUID().uuidString).3mf")
