@@ -1,0 +1,192 @@
+import XCTest
+@testable import PrintPlexCore
+
+final class LibraryScannerTests: XCTestCase {
+
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("printplex-scan-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func write(_ relativePath: String, _ content: String = "x") throws {
+        let url = root.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(content.utf8).write(to: url)
+    }
+
+    private func collectEvents() async -> [ScanEvent] {
+        var events: [ScanEvent] = []
+        for await event in LibraryScanner.scan(root: root) {
+            events.append(event)
+        }
+        return events
+    }
+
+    // MARK: - Project detection
+
+    func testDetectsProjectFromModelFileDepth() async throws {
+        try write("Figurines/Dragon/dragon.stl")
+        try write("Figurines/Dragon/rendu.png")
+        try write("orphelin.stl")
+
+        let events = await collectEvents()
+
+        let projects = events.compactMap { event -> ScannedProject? in
+            if case .projectDiscovered(let p, _) = event { return p }
+            return nil
+        }
+        XCTAssertEqual(projects.count, 1)
+        XCTAssertEqual(projects.first?.name, "Dragon")
+
+        // The render image must be attached to the Dragon project
+        let projectFiles = events.compactMap { event -> String? in
+            if case .fileScanned(let f, _, _, _) = event { return f.fileName }
+            return nil
+        }
+        XCTAssertTrue(projectFiles.contains("dragon"))
+        XCTAssertTrue(projectFiles.contains("rendu"))
+
+        // Root-level file is an orphan
+        let orphans = events.compactMap { event -> String? in
+            if case .unsortedFileScanned(let f, _, _) = event { return f.fileName }
+            return nil
+        }
+        XCTAssertEqual(orphans, ["orphelin"])
+    }
+
+    func testSkipsDateGroupingFolders() async throws {
+        try write("Posters/2026-04/MonProjet/piece.3mf")
+
+        let events = await collectEvents()
+
+        let projects = events.compactMap { event -> ScannedProject? in
+            if case .projectDiscovered(let p, _) = event { return p }
+            return nil
+        }
+        XCTAssertEqual(projects.count, 1)
+        XCTAssertEqual(projects.first?.name, "MonProjet")
+    }
+
+    func testInfoJsonMarksProjectAndProvidesName() async throws {
+        try write("Groupe/AvecInfo/info.json", #"{"nom": "Nom Personnalisé"}"#)
+        try write("Groupe/AvecInfo/rendu.png")
+
+        let events = await collectEvents()
+
+        let projects = events.compactMap { event -> ScannedProject? in
+            if case .projectDiscovered(let p, _) = event { return p }
+            return nil
+        }
+        XCTAssertEqual(projects.count, 1)
+        XCTAssertEqual(projects.first?.name, "Nom Personnalisé")
+        XCTAssertEqual(projects.first?.info?.nom, "Nom Personnalisé")
+    }
+
+    func testKnownPathsFlagAsNotNew() async throws {
+        try write("Groupe/Projet/piece.stl")
+        let projectPath = root.appendingPathComponent("Groupe/Projet").standardizedFileURL.path
+        let filePath = root.appendingPathComponent("Groupe/Projet/piece.stl")
+            .standardizedFileURL.path
+
+        var isNewProject: Bool?
+        var isNewFile: Bool?
+        for await event in LibraryScanner.scan(
+            root: root,
+            knownProjectPaths: [projectPath],
+            knownFilePaths: [filePath]
+        ) {
+            if case .projectDiscovered(_, let isNew) = event { isNewProject = isNew }
+            if case .fileScanned(_, _, let isNew, _) = event { isNewFile = isNew }
+        }
+
+        XCTAssertEqual(isNewProject, false)
+        XCTAssertEqual(isNewFile, false)
+    }
+
+    // MARK: - Date grouping folder heuristics
+
+    func testDateGroupingFolderDetection() {
+        XCTAssertTrue(LibraryScanner.isDateGroupingFolder("2026-04"))
+        XCTAssertTrue(LibraryScanner.isDateGroupingFolder("2026-04-15"))
+        XCTAssertTrue(LibraryScanner.isDateGroupingFolder("Apr 2026"))
+        XCTAssertTrue(LibraryScanner.isDateGroupingFolder("Juin 2026"))
+        XCTAssertTrue(LibraryScanner.isDateGroupingFolder("Décembre 2026"))
+        XCTAssertFalse(LibraryScanner.isDateGroupingFolder("MonProjet"))
+        XCTAssertFalse(LibraryScanner.isDateGroupingFolder("Dragon 3D"))
+    }
+
+    // MARK: - info.json round-trip
+
+    func testUpdateProjectInfoPreservesUnknownKeys() throws {
+        let projectDir = root.appendingPathComponent("Groupe/Projet")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        let infoURL = projectDir.appendingPathComponent("info.json")
+        try Data(#"{"nom": "Ancien", "champ_inconnu": 42}"#.utf8).write(to: infoURL)
+
+        try LibraryScanner.updateProjectInfo(in: projectDir.path) { info in
+            info.nom = "Nouveau"
+            info.tags = ["deco"]
+        }
+
+        let dict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: infoURL)) as? [String: Any]
+        XCTAssertEqual(dict?["nom"] as? String, "Nouveau")
+        XCTAssertEqual(dict?["champ_inconnu"] as? Int, 42)
+        XCTAssertEqual(dict?["tags"] as? [String], ["deco"])
+    }
+
+    // MARK: - info.json generation
+
+    func testGenerateProjectInfoDetectsMaterialsAndTags() {
+        let info = LibraryScanner.generateProjectInfo(
+            folderName: "Dragon PETG",
+            fileNames: ["corps-pla.stl", "ailes.stl"],
+            existingCategories: ["Figurines", "Déco"],
+            existingMaterials: [],
+            existingTags: ["dragon", "fantasy"]
+        )
+        XCTAssertEqual(info.nom, "Dragon PETG")
+        XCTAssertEqual(info.materiaux_suggeres, ["PLA", "PETG"])
+        XCTAssertEqual(info.tags, ["dragon"])
+    }
+
+    // MARK: - File role / kind
+
+    func testFileRoleMapping() {
+        XCTAssertEqual(FileRole.from(extension: "stl"), .modelPart)
+        XCTAssertEqual(FileRole.from(extension: "3mf"), .modelPart)
+        XCTAssertEqual(FileRole.from(extension: "png"), .renderImage)
+        XCTAssertEqual(FileRole.from(extension: "pdf"), .document)
+        XCTAssertEqual(FileRole.from(extension: "gcode"), .slicerConfig)
+        XCTAssertEqual(FileRole.from(extension: "json", fileName: "info"), .document)
+        XCTAssertEqual(FileRole.from(extension: "json", fileName: "config"), .slicerConfig)
+        XCTAssertEqual(FileRole.from(extension: "blend"), .other)
+    }
+
+    func testFileKindMapping() {
+        XCTAssertEqual(FileKind.from(extension: "stl"), .stl)
+        XCTAssertEqual(FileKind.from(extension: "3MF"), .threeMF)
+        XCTAssertEqual(FileKind.from(extension: "step"), .step)
+        XCTAssertEqual(FileKind.from(extension: "stp"), .step)
+        XCTAssertEqual(FileKind.from(extension: "txt"), .other)
+    }
+
+    // MARK: - Hashing
+
+    func testHashFileIsDeterministic() throws {
+        try write("a.txt", "contenu")
+        try write("b.txt", "contenu")
+        let hashA = try LibraryScanner.hashFile(at: root.appendingPathComponent("a.txt"))
+        let hashB = try LibraryScanner.hashFile(at: root.appendingPathComponent("b.txt"))
+        XCTAssertEqual(hashA, hashB)
+        XCTAssertEqual(hashA.count, 64) // SHA-256 hex
+    }
+}
