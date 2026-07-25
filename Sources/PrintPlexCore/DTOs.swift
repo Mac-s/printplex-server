@@ -15,10 +15,14 @@ public struct MeshStatsDTO: Codable, Sendable, Equatable {
     public var parsedAt: Date?
     /// Number of print plates detected in the file (1 for standard 3MF).
     public var plateCount: Int
+    /// Which plate (0-based) these particular stats describe. Always 0 for standard
+    /// 3MF files; for multi-plate BambuStudio files, `FileModel.plateStats` holds one
+    /// entry per plate, each with its own `plateIndex`.
+    public var plateIndex: Int
 
     public init(triangles: Int, widthMM: Double, heightMM: Double, depthMM: Double,
                 volumeMM3: Double, surfaceAreaMM2: Double = 0, vertexCount: Int = 0,
-                parsedAt: Date? = nil, plateCount: Int = 1) {
+                parsedAt: Date? = nil, plateCount: Int = 1, plateIndex: Int = 0) {
         self.triangles = triangles
         self.widthMM = widthMM
         self.heightMM = heightMM
@@ -28,6 +32,7 @@ public struct MeshStatsDTO: Codable, Sendable, Equatable {
         self.vertexCount = vertexCount
         self.parsedAt = parsedAt
         self.plateCount = plateCount
+        self.plateIndex = plateIndex
     }
 
     public init(from result: ThreeMFParser.Result, parsedAt: Date? = nil) {
@@ -39,7 +44,30 @@ public struct MeshStatsDTO: Codable, Sendable, Equatable {
                   surfaceAreaMM2: result.surfaceAreaMM2,
                   vertexCount: result.vertexCount,
                   parsedAt: parsedAt,
-                  plateCount: result.plateCount)
+                  plateCount: result.plateCount,
+                  plateIndex: result.plateIndex)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case triangles, widthMM, heightMM, depthMM, volumeMM3, surfaceAreaMM2
+        case vertexCount, parsedAt, plateCount, plateIndex
+    }
+
+    // Custom decode so rows cached before `plateIndex` existed (or before
+    // surfaceAreaMM2/vertexCount/plateCount) still load — same pattern as
+    // PrinterProfile's decodeIfPresent fallbacks in PrintEstimator.swift.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        triangles      = try c.decode(Int.self, forKey: .triangles)
+        widthMM        = try c.decode(Double.self, forKey: .widthMM)
+        heightMM       = try c.decode(Double.self, forKey: .heightMM)
+        depthMM        = try c.decode(Double.self, forKey: .depthMM)
+        volumeMM3      = try c.decode(Double.self, forKey: .volumeMM3)
+        surfaceAreaMM2 = try c.decodeIfPresent(Double.self, forKey: .surfaceAreaMM2) ?? 0
+        vertexCount    = try c.decodeIfPresent(Int.self, forKey: .vertexCount) ?? 0
+        parsedAt       = try c.decodeIfPresent(Date.self, forKey: .parsedAt)
+        plateCount     = try c.decodeIfPresent(Int.self, forKey: .plateCount) ?? 1
+        plateIndex     = try c.decodeIfPresent(Int.self, forKey: .plateIndex) ?? 0
     }
 }
 
@@ -77,13 +105,19 @@ public struct FileDTO: Codable, Sendable, Identifiable {
     public var cloudStatus: CloudStatus
     public var sourceApp: String?
     public var meshStats: MeshStatsDTO?
+    /// Populated only when the file has more than one print plate (BambuStudio project
+    /// files) — one entry per plate, each carrying its own `plateIndex`. `meshStats` above
+    /// always mirrors the plateIndex == 0 entry for backward compatibility with clients
+    /// that only look at a single result.
+    public var plateStats: [MeshStatsDTO]?
     public var printParams: PrintParamsDTO?
 
     public init(id: UUID = UUID(), path: String, fileName: String, fileExtension: String,
                 fileSize: Int64, createdAt: Date, modifiedAt: Date, contentHash: String? = nil,
                 kind: FileKind, fileRole: FileRole = .other, tags: [String] = [],
                 cloudStatus: CloudStatus = .local, sourceApp: String? = nil,
-                meshStats: MeshStatsDTO? = nil, printParams: PrintParamsDTO? = nil) {
+                meshStats: MeshStatsDTO? = nil, plateStats: [MeshStatsDTO]? = nil,
+                printParams: PrintParamsDTO? = nil) {
         self.id = id
         self.path = path
         self.fileName = fileName
@@ -98,6 +132,7 @@ public struct FileDTO: Codable, Sendable, Identifiable {
         self.cloudStatus = cloudStatus
         self.sourceApp = sourceApp
         self.meshStats = meshStats
+        self.plateStats = plateStats
         self.printParams = printParams
     }
 }

@@ -90,14 +90,31 @@ Rebâtie pour reproduire la vue macOS à l'identique plutôt qu'un simple formul
 - **Shopify riche** : correspondance affichée (pastille de statut, titre, prix, lien "Voir" vers la
   fiche boutique), assignation manuelle du produit (`<select>` avec tous les produits synchronisés +
   "Auto (par nom)"), bouton de resynchronisation.
-- **Estimation par fichier** : contrairement à l'ancien formulaire (un seul calcul agrégé côté
-  serveur), `PrintEstimator.swift` a été **porté fidèlement en JS** (`estimatePrint()`/`totalEstimate()`
-  dans `Public/app.js`) et tourne entièrement côté client à partir des `meshStats` déjà chargés —
-  changer d'imprimante/matériau/fichier/niveau de manutention recalcule instantanément, sans aller-retour
-  réseau, exactement comme les vues SwiftUI réactives de l'app macOS. Le niveau de manutention par
-  fichier (`aucun`/`easy`/`medium`/`hard`) se persiste via un nouvel endpoint `PATCH /api/files/:id`
-  (`FileUpdateRequest.manualWorkLevel`, stocké dans `printParams` côté `FileModel`) — le seul ajout
-  côté serveur qu'a nécessité cette vue.
+- **Estimation par fichier** : la section liste **tous** les fichiers `.3mf` du projet (kind
+  `threeMF`), même ceux qu'un scan n'a pas encore réussi à parser (`meshStats` absent) — ils
+  apparaissent avec la mention "pas de statistiques" plutôt que de disparaître silencieusement.
+  Contrairement à l'ancien formulaire (un seul calcul agrégé côté serveur), `PrintEstimator.swift`
+  a été **porté fidèlement en JS** (`estimatePrint()`/`totalEstimate()` dans `Public/app.js`) et
+  tourne entièrement côté client à partir des `meshStats`/`plateStats` déjà chargés — changer
+  d'imprimante/matériau/fichier/plateau/niveau de manutention recalcule instantanément, sans
+  aller-retour réseau, exactement comme les vues SwiftUI réactives de l'app macOS. Le niveau de
+  manutention par fichier (`aucun`/`easy`/`medium`/`hard`) se persiste via un endpoint
+  `PATCH /api/files/:id` (`FileUpdateRequest.manualWorkLevel`, stocké dans `printParams`).
+- **Fichiers .3mf multi-plateaux (BambuStudio)** : `ThreeMFParser.parseAllPlates()` parse
+  **chaque plateau séparément** (`Metadata/model_settings.config` → objets par plateau →
+  `3D/3dmodel.model` résout les `<component>` vers leurs fichiers géométrie sous `3D/Objects/`) —
+  jamais fusionnés, pour ne pas gonfler artificiellement poids/temps/coût d'un plateau avec la
+  géométrie des autres. `parse()`/`parse(data:)` restent des raccourcis qui ne renvoient que le
+  plateau 0, pour ne rien casser côté appelants existants. Le scan met en cache `meshStats`
+  (plateau 0, comme avant) et un nouveau `plateStats: [MeshStatsDTO]?` (tous les plateaux,
+  seulement rempli si `plateCount > 1`) sur `FileModel`/`FileDTO`. Quand un fichier a plusieurs
+  plateaux détectés, sa carte d'estimation affiche un sélecteur "Plateau 1/2/3…" — changer de
+  plateau recalcule instantanément (toujours côté client, aucun aller-retour réseau).
+  `GET /api/files/:id/estimate` accepte aussi `?plateIndex=N` pour les clients qui préfèrent
+  laisser le serveur calculer (l'agrégat `GET /api/projects/:id/estimate` reste plateau 0 par
+  fichier, inchangé — pas de bon moyen d'exprimer "un plateau différent par fichier" dans un seul
+  paramètre de requête, et le dashboard web ne l'utilise plus de toute façon depuis le calcul
+  client-side).
 - **Fichiers groupés par rôle** : `modelPart` → `slicerConfig` → `document` → `other`, même ordre que
   `roleDisplayOrder` côté macOS (les images sont exclues de cette liste, déjà montrées dans la galerie).
 

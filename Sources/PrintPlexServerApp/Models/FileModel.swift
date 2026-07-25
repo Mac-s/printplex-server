@@ -21,6 +21,9 @@ final class FileModel: Model, @unchecked Sendable {
     @Field(key: "tags") var tags: [String]
     @OptionalField(key: "source_app") var sourceApp: String?
     @OptionalField(key: "mesh_stats") var meshStats: MeshStatsDTO?
+    /// One entry per plate, only populated when the file has more than one — see
+    /// `FileDTO.plateStats`.
+    @OptionalField(key: "plate_stats") var plateStats: [MeshStatsDTO]?
     @OptionalField(key: "print_params") var printParams: PrintParamsDTO?
 
     init() {}
@@ -59,6 +62,7 @@ final class FileModel: Model, @unchecked Sendable {
             cloudStatus: cloudStatus,
             sourceApp: sourceApp,
             meshStats: meshStats,
+            plateStats: plateStats,
             printParams: printParams
         )
     }

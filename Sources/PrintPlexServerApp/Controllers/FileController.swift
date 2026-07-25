@@ -142,10 +142,12 @@ struct FileController: RouteCollection {
         throw Abort(.notFound, reason: "Pas de vignette pour ce type de fichier")
     }
 
+    /// Accepts `?plateIndex=N` for multi-plate files (defaults to plate 0).
     @Sendable
     func estimate(req: Request) async throws -> PrintEstimate {
         let file = try await find(req)
-        guard let stats = file.meshStats else {
+        let query = try req.query.decode(EstimateQuery.self)
+        guard let stats = EstimateSupport.meshStats(for: file, plateIndex: query.plateIndex) else {
             throw Abort(.conflict, reason: "Pas de statistiques de maillage — lancez un scan d'abord")
         }
         let (printer, material, settings, manual) = try await EstimateSupport.inputs(from: req)

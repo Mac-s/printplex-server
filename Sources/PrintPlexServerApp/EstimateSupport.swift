@@ -9,6 +9,8 @@ struct EstimateQuery: Content {
     var shellCount: Int?
     var infillPercent: Int?
     var manualWork: String?
+    /// 0-based plate to estimate, for multi-plate files. Defaults to plate 0.
+    var plateIndex: Int?
 }
 
 enum EstimateSupport {
@@ -57,7 +59,16 @@ enum EstimateSupport {
             depthMM: stats.depthMM,
             triangleCount: stats.triangles,
             vertexCount: stats.vertexCount,
-            plateCount: stats.plateCount
+            plateCount: stats.plateCount,
+            plateIndex: stats.plateIndex
         )
+    }
+
+    /// Resolves which plate's mesh stats to use for a file's estimate: `meshStats`
+    /// (plate 0) by default, or the requested plate from `plateStats` when the file
+    /// has more than one and a specific one was asked for.
+    static func meshStats(for file: FileModel, plateIndex: Int?) -> MeshStatsDTO? {
+        guard let plateIndex, plateIndex != 0 else { return file.meshStats }
+        return file.plateStats?.first { $0.plateIndex == plateIndex } ?? file.meshStats
     }
 }

@@ -857,9 +857,9 @@ const ESTIMATE_PRINTER_KEY = "printplex_estimate_printer_id";
 const ESTIMATE_MATERIAL_KEY = "printplex_estimate_material_id";
 
 // Per-project-detail-view transient UI state (which file is selected for
-// estimation, per-file manual-work picks) — reset every time a project is
-// opened, mirrors the macOS view's @State.
-let detailState = { manualWorkPerFile: {}, estimateFileId: "all" };
+// estimation, per-file manual-work picks, per-file plate picks for multi-plate
+// 3MF files) — reset every time a project is opened, mirrors the macOS view's @State.
+let detailState = { manualWorkPerFile: {}, estimateFileId: "all", platePerFile: {} };
 
 // ── PrintEstimator, ported to JS (mirrors PrintEstimator.swift exactly) so
 // changing printer/material/manual-work/file-selection recomputes instantly
@@ -1014,7 +1014,7 @@ async function openProject(id) {
   wireBackLink();
   try {
     const project = await api(`/api/projects/${id}`);
-    detailState = { manualWorkPerFile: {}, estimateFileId: "all" };
+    detailState = { manualWorkPerFile: {}, estimateFileId: "all", platePerFile: {} };
     for (const f of project.files || []) {
       if (f.printParams?.manualWorkLevel) detailState.manualWorkPerFile[f.id] = f.printParams.manualWorkLevel;
     }
@@ -1384,12 +1384,14 @@ function wireShopifySection(project) {
 // ── Print estimate (per file, client-side PrintEstimator, persisted manual work) ──
 
 function estimateSectionHtml(project) {
-  const modelParts = (project.files || []).filter((f) => f.fileRole === "modelPart" && f.meshStats);
-  if (modelParts.length === 0) {
+  // Every 3MF file is listed here, even ones a scan hasn't parsed yet (or failed to) —
+  // those just render as "pas de statistiques" instead of vanishing silently.
+  const threeMFFiles = (project.files || []).filter((f) => f.kind === "threeMF");
+  if (threeMFFiles.length === 0) {
     return `
       <div class="section">
         <div class="section-title">Estimation d'impression</div>
-        <div class="empty">Aucune pièce 3D avec statistiques de maillage — lancez un scan.</div>
+        <div class="empty">Aucun fichier 3MF dans ce projet.</div>
       </div>`;
   }
   if (state.printers.length === 0 || state.materials.length === 0) {
@@ -1405,12 +1407,12 @@ function estimateSectionHtml(project) {
     <div class="section">
       <div class="section-title">Estimation d'impression</div>
       <div class="form-grid">
-        ${modelParts.length > 1 ? `
+        ${threeMFFiles.length > 1 ? `
           <div class="field">
-            <label>Fichier</label>
+            <label>Fichier 3MF</label>
             <select id="estimateFileSelect">
-              <option value="all" ${detailState.estimateFileId === "all" ? "selected" : ""}>Tous (${modelParts.length} fichiers)</option>
-              ${modelParts.map((f) => `<option value="${f.id}" ${detailState.estimateFileId === f.id ? "selected" : ""}>${escapeHtml(f.fileName)}.${escapeHtml(f.fileExtension)}</option>`).join("")}
+              <option value="all" ${detailState.estimateFileId === "all" ? "selected" : ""}>Tous (${threeMFFiles.length} fichiers)</option>
+              ${threeMFFiles.map((f) => `<option value="${f.id}" ${detailState.estimateFileId === f.id ? "selected" : ""}>${escapeHtml(f.fileName)}.${escapeHtml(f.fileExtension)}${f.meshStats ? "" : " — pas de statistiques"}</option>`).join("")}
             </select>
           </div>` : ""}
         <div class="field"><label>Imprimante</label><select id="estimatePrinterSelect">${selectOptionsHtml(state.printers, printerId)}</select></div>
@@ -1420,12 +1422,37 @@ function estimateSectionHtml(project) {
     </div>`;
 }
 
-function estimateCardHtml(file, est) {
+/// Which plate's stats to estimate for a file: the one explicitly picked in
+/// detailState.platePerFile, falling back to plate 0 (meshStats) for single-plate files
+/// or when nothing's been picked yet.
+function selectedPlateStats(file) {
+  if (!file.plateStats || file.plateStats.length < 2) return file.meshStats || null;
+  const idx = detailState.platePerFile[file.id] ?? 0;
+  return file.plateStats.find((p) => p.plateIndex === idx) || file.meshStats || null;
+}
+
+function estimateUnavailableRowHtml(file) {
+  return `
+    <div class="estimate-card estimate-unavailable">
+      <div class="estimate-file-name">${escapeHtml(file.fileName)}.${escapeHtml(file.fileExtension)}</div>
+      <div class="empty">Pas de statistiques de maillage — relancez un scan.</div>
+    </div>`;
+}
+
+function estimateCardHtml(file, est, stats) {
   const level = detailState.manualWorkPerFile[file.id] || "aucun";
   const totalCost = est.filamentCostEur + est.timeCostEur + est.manualCostEur;
+  const hasMultiplePlates = file.plateStats && file.plateStats.length > 1;
   return `
     <div class="estimate-card">
       <div class="estimate-file-name">${escapeHtml(file.fileName)}.${escapeHtml(file.fileExtension)}</div>
+      ${hasMultiplePlates ? `
+        <div class="field plate-field">
+          <label>Plateau (${file.plateStats.length} détectés)</label>
+          <select class="plate-select" data-file-id="${file.id}">
+            ${file.plateStats.map((p) => `<option value="${p.plateIndex}" ${p.plateIndex === stats.plateIndex ? "selected" : ""}>Plateau ${p.plateIndex + 1}</option>`).join("")}
+          </select>
+        </div>` : ""}
       <div class="segmented" data-file-id="${file.id}">
         ${MANUAL_WORK_LEVELS.map((k) => `<button class="seg-btn ${k === level ? "active" : ""}" data-level="${k}">${MANUAL_WORK_LABEL[k]}</button>`).join("")}
       </div>
@@ -1436,7 +1463,6 @@ function estimateCardHtml(file, est) {
         <span>📚 ${est.layerCount} couches</span>
       </div>
       <div class="estimate-fit ${est.fitsOnBed ? "ok" : "bad"}">${est.fitsOnBed ? `✅ Tient sur ${escapeHtml(est.printerName)}` : `❌ Ne tient pas sur ${escapeHtml(est.printerName)}`}</div>
-      ${file.meshStats.plateCount > 1 ? `<div class="estimate-warning">ℹ️ Fichier multi-plateau (${file.meshStats.plateCount} plateaux) — estimation basée sur le premier plateau</div>` : ""}
       <div class="cost-breakdown">
         <div class="cost-row"><span>Filament</span><span>${formatEur(est.filamentCostEur)}</span></div>
         <div class="cost-row"><span>Machine</span><span>${formatEur(est.timeCostEur)}</span></div>
@@ -1470,18 +1496,24 @@ function totalEstimateCardHtml(total) {
 function renderEstimateResults(project) {
   const box = document.getElementById("estimateResults");
   if (!box) return;
-  const modelParts = (project.files || []).filter((f) => f.fileRole === "modelPart" && f.meshStats);
+  const threeMFFiles = (project.files || []).filter((f) => f.kind === "threeMF");
   const printer = state.printers.find((p) => p.id === document.getElementById("estimatePrinterSelect")?.value);
   const material = state.materials.find((m) => m.id === document.getElementById("estimateMaterialSelect")?.value);
   if (!printer || !material) { box.innerHTML = `<div class="empty">Aucune imprimante/matériau sélectionné.</div>`; return; }
 
-  const selectedFiles = detailState.estimateFileId === "all" ? modelParts : modelParts.filter((f) => f.id === detailState.estimateFileId);
-  const rows = selectedFiles.map((f) => {
-    const level = detailState.manualWorkPerFile[f.id] || "aucun";
-    return { file: f, est: estimatePrint(f.meshStats, printer, material, MANUAL_WORK_COST_EUR[level]) };
-  });
+  const selectedFiles = detailState.estimateFileId === "all" ? threeMFFiles : threeMFFiles.filter((f) => f.id === detailState.estimateFileId);
 
-  let html = rows.map(({ file, est }) => estimateCardHtml(file, est)).join("");
+  const rows = [];
+  const unavailable = [];
+  for (const f of selectedFiles) {
+    const stats = selectedPlateStats(f);
+    if (!stats) { unavailable.push(f); continue; }
+    const level = detailState.manualWorkPerFile[f.id] || "aucun";
+    rows.push({ file: f, stats, est: estimatePrint(stats, printer, material, MANUAL_WORK_COST_EUR[level]) });
+  }
+
+  let html = rows.map(({ file, est, stats }) => estimateCardHtml(file, est, stats)).join("");
+  html += unavailable.map((f) => estimateUnavailableRowHtml(f)).join("");
   if (rows.length > 1) html += totalEstimateCardHtml(totalEstimate(rows.map((r) => r.est)));
   box.innerHTML = html;
   wireEstimateResultEvents(project);
@@ -1499,6 +1531,12 @@ function wireEstimateResultEvents(project) {
       renderEstimateResults(project);
       api(`/api/files/${fileId}`, { method: "PATCH", body: JSON.stringify({ manualWorkLevel: level }) })
         .catch((e) => console.error("Échec de la sauvegarde du niveau de travail manuel", e));
+    });
+  });
+  box.querySelectorAll(".plate-select").forEach((sel) => {
+    sel.addEventListener("change", (evt) => {
+      detailState.platePerFile[sel.dataset.fileId] = Number(evt.target.value);
+      renderEstimateResults(project);
     });
   });
 }

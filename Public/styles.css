@@ -788,7 +788,9 @@ button.entity-row:hover { border-color: var(--accent); }
 }
 .estimate-card:last-child { margin-bottom: 0; }
 .estimate-card.estimate-total { background: var(--accent-soft); border-color: var(--accent); }
+.estimate-card.estimate-unavailable { opacity: .7; border-style: dashed; }
 .estimate-file-name { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.plate-field { margin-bottom: 10px; }
 
 .segmented { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
 .seg-btn {

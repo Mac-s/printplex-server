@@ -170,6 +170,50 @@ final class ServerTests: XCTestCase {
         }
     }
 
+    /// A 3MF with 2 plates must estimate each plate independently — never merge their
+    /// geometry, and never silently only expose plate 0.
+    func testMultiPlate3MFEstimatesPerPlate() async throws {
+        let projectDir = mediaDir.appendingPathComponent("Groupe/MultiPlate")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try TestZip.twoPlate3MF().write(to: projectDir.appendingPathComponent("multi.3mf"))
+        try Data(#"{"nom": "Multi Plate Test"}"#.utf8)
+            .write(to: projectDir.appendingPathComponent("info.json"))
+
+        try await addLibrary()
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var fileID: UUID?
+        try await app.test(.GET, "api/files?kind=threeMF") { res async throws in
+            let files = try res.content.decode([FileDTO].self)
+            let multi = try XCTUnwrap(files.first { $0.fileName == "multi" })
+
+            let stats = try XCTUnwrap(multi.meshStats, "Le scan doit parser le plateau 0")
+            XCTAssertEqual(stats.volumeMM3, 1000, accuracy: 0.001)
+            XCTAssertEqual(stats.plateIndex, 0)
+            XCTAssertEqual(stats.plateCount, 2)
+
+            let plates = try XCTUnwrap(multi.plateStats, "Les stats des 2 plateaux doivent être mises en cache")
+            XCTAssertEqual(plates.count, 2)
+            let plate1 = try XCTUnwrap(plates.first { $0.plateIndex == 1 })
+            XCTAssertEqual(plate1.volumeMM3, 8000, accuracy: 0.001)
+
+            fileID = multi.id
+        }
+        let id = try XCTUnwrap(fileID)
+
+        // Default (no plateIndex) estimates plate 0 — 10mm / 0.2mm layers = 50 layers.
+        try await app.test(.GET, "api/files/\(id)/estimate") { res async throws in
+            let estimate = try res.content.decode(PrintEstimate.self)
+            XCTAssertEqual(estimate.layerCount, 50)
+        }
+
+        // ?plateIndex=1 estimates the 20mm cube on plate 1 — 20mm / 0.2mm layers = 100 layers.
+        try await app.test(.GET, "api/files/\(id)/estimate?plateIndex=1") { res async throws in
+            let estimate = try res.content.decode(PrintEstimate.self)
+            XCTAssertEqual(estimate.layerCount, 100)
+        }
+    }
+
     func testPatchProjectUpdatesInfoJson() async throws {
         try await addLibrary()
         try await app.test(.POST, "api/scan?wait=true")

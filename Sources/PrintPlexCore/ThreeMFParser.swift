@@ -202,11 +202,11 @@ private final class MeshDelegate: NSObject, XMLParserDelegate {
 
 // MARK: - BambuStudio plate config delegate
 // Parses Metadata/model_settings.config to detect multi-plate files and identify
-// which scene object IDs (and how many instances) belong to plate 0.
+// which scene object IDs (and how many instances) belong to each plate.
 
 private final class PlateConfigDelegate: NSObject, XMLParserDelegate {
-    /// sceneObjectId → number of instances on plate 0
-    var plate0Objects: [Int: Int] = [:]
+    /// plateIndex → sceneObjectId → number of instances on that plate
+    var objectsByPlate: [Int: [Int: Int]] = [:]
     var plateCount = 1
     private var currentObjectId: Int? = nil
 
@@ -222,7 +222,7 @@ private final class PlateConfigDelegate: NSObject, XMLParserDelegate {
            let plateIdx = Int(value),
            let objId = currentObjectId {
             plateCount = max(plateCount, plateIdx + 1)
-            if plateIdx == 0 { plate0Objects[objId, default: 0] += 1 }
+            objectsByPlate[plateIdx, default: [:]][objId, default: 0] += 1
         }
     }
 
@@ -288,12 +288,13 @@ public enum ThreeMFParser {
         public let triangleCount: Int
         public let vertexCount:   Int
         /// Number of print plates detected. 1 = standard 3MF or single-plate BambuStudio file.
-        /// When > 1 only plate 0 geometry is counted.
         public let plateCount: Int
+        /// Which plate (0-based) this Result describes. Always 0 for standard 3MF files.
+        public let plateIndex: Int
 
         public init(volumeMM3: Double, surfaceAreaMM2: Double,
                     widthMM: Double, heightMM: Double, depthMM: Double,
-                    triangleCount: Int, vertexCount: Int, plateCount: Int) {
+                    triangleCount: Int, vertexCount: Int, plateCount: Int, plateIndex: Int = 0) {
             self.volumeMM3 = volumeMM3
             self.surfaceAreaMM2 = surfaceAreaMM2
             self.widthMM = widthMM
@@ -302,11 +303,14 @@ public enum ThreeMFParser {
             self.triangleCount = triangleCount
             self.vertexCount = vertexCount
             self.plateCount = plateCount
+            self.plateIndex = plateIndex
         }
     }
 
-    /// Parses a .3MF file and returns combined geometry statistics for plate 0 (or all geometry
-    /// for standard 3MF files). CPU-bound — call from a background task.
+    /// Parses a .3MF file and returns geometry statistics for plate 0 only (or the whole
+    /// model for standard 3MF files with no plate concept). Kept for callers that only
+    /// care about a single result; see `parseAllPlates` for full multi-plate support.
+    /// CPU-bound — call from a background task.
     public static func parse(_ url: URL) throws -> Result {
         let zipData = try Data(contentsOf: url)
         return try parse(data: zipData)
@@ -314,6 +318,23 @@ public enum ThreeMFParser {
 
     /// Same as `parse(_:)` but from in-memory data (useful for server streaming).
     public static func parse(data zipData: Data) throws -> Result {
+        let all = try parseAllPlates(data: zipData)
+        return all.first { $0.plateIndex == 0 } ?? all[0]
+    }
+
+    /// Parses every print plate in a .3MF file separately, so a multi-plate BambuStudio
+    /// project file yields one `Result` per plate instead of merging every plate's geometry
+    /// together (which would silently inflate weight/time/cost for the plates you didn't
+    /// actually intend to estimate). Standard 3MF files (or BambuStudio files without
+    /// multi-plate metadata) yield a single Result at plateIndex 0 covering the whole model.
+    /// CPU-bound — call from a background task.
+    public static func parseAllPlates(_ url: URL) throws -> [Result] {
+        let zipData = try Data(contentsOf: url)
+        return try parseAllPlates(data: zipData)
+    }
+
+    /// Same as `parseAllPlates(_:)` but from in-memory data.
+    public static func parseAllPlates(data zipData: Data) throws -> [Result] {
         let zip = ZipReader(data: zipData)
         guard let eocd = zip.findEOCD() else { throw Failure.badZip }
 
@@ -326,20 +347,16 @@ public enum ThreeMFParser {
             off += e.totalSize
         }
 
-        // ── Step 1: Detect BambuStudio multi-plate format ────────────────────────
+        // ── Detect BambuStudio multi-plate format ────────────────────────────────
         // model_settings.config maps scene object IDs to plate indices and instance counts.
-        var filesToParse: [(path: String, count: Int)] = []
-        var plateCount = 1
-
         if let cfgEntry = index["metadata/model_settings.config"],
            let cfgData = try? zip.extract(cfgEntry) {
             let plateDel = PlateConfigDelegate()
             let plateP   = XMLParser(data: cfgData)
             plateP.delegate = plateDel
             plateP.parse()
-            plateCount = plateDel.plateCount
 
-            if plateCount > 1, !plateDel.plate0Objects.isEmpty,
+            if plateDel.plateCount > 1, !plateDel.objectsByPlate.isEmpty,
                let mainEntry = findMainModelEntry(in: index),
                let mainData  = try? zip.extract(mainEntry) {
                 // Parse the scene file to get objectId → component file paths
@@ -348,23 +365,50 @@ public enum ThreeMFParser {
                 sceneP.delegate = sceneDel
                 sceneP.parse()
 
-                for (objId, instanceCount) in plateDel.plate0Objects {
-                    for path in sceneDel.componentsByObjectId[objId] ?? [] {
-                        filesToParse.append((norm(path), instanceCount))
+                var results: [Result] = []
+                for plateIdx in 0..<plateDel.plateCount {
+                    var filesToParse: [(path: String, count: Int)] = []
+                    for (objId, instanceCount) in plateDel.objectsByPlate[plateIdx] ?? [:] {
+                        for path in sceneDel.componentsByObjectId[objId] ?? [] {
+                            filesToParse.append((norm(path), instanceCount))
+                        }
                     }
+                    guard !filesToParse.isEmpty,
+                          let geometry = parseGeometry(filesToParse, zip: zip, index: index)
+                    else { continue }
+                    results.append(Result(
+                        volumeMM3: geometry.vol, surfaceAreaMM2: geometry.surf,
+                        widthMM: geometry.width, heightMM: geometry.height, depthMM: geometry.depth,
+                        triangleCount: geometry.tri, vertexCount: geometry.verts,
+                        plateCount: plateDel.plateCount, plateIndex: plateIdx
+                    ))
                 }
+                guard !results.isEmpty else { throw Failure.emptyMesh }
+                return results
             }
         }
 
-        // ── Step 2: Fall back for standard 3MF / single-plate / unknown format ──
-        if filesToParse.isEmpty {
-            filesToParse = index.keys
-                .filter { $0.hasSuffix(".model") }
-                .map   { ($0, 1) }
-        }
+        // ── Standard 3MF / single-plate / unknown format: one Result, everything in it ──
+        let filesToParse = index.keys.filter { $0.hasSuffix(".model") }.map { ($0, 1) }
         guard !filesToParse.isEmpty else { throw Failure.noModelFile }
+        guard let geometry = parseGeometry(filesToParse, zip: zip, index: index) else {
+            throw Failure.emptyMesh
+        }
+        return [Result(
+            volumeMM3: geometry.vol, surfaceAreaMM2: geometry.surf,
+            widthMM: geometry.width, heightMM: geometry.height, depthMM: geometry.depth,
+            triangleCount: geometry.tri, vertexCount: geometry.verts,
+            plateCount: 1, plateIndex: 0
+        )]
+    }
 
-        // ── Step 3: Parse geometry — each file × instance count ──────────────────
+    /// Parses geometry for a set of resolved model files (each × its instance count on the
+    /// plate) and aggregates them into one combined volume/surface/bounding box — shared by
+    /// both the single-plate fallback and each plate's pass in `parseAllPlates`.
+    private static func parseGeometry(
+        _ filesToParse: [(path: String, count: Int)],
+        zip: ZipReader, index: [String: ZipReader.CDEntry]
+    ) -> (vol: Double, surf: Double, width: Double, height: Double, depth: Double, tri: Int, verts: Int)? {
         var totalVol:  Double = 0
         var totalSurf: Double = 0
         var totalTri   = 0
@@ -390,18 +434,8 @@ public enum ThreeMFParser {
             if d.minZ < gMinZ { gMinZ = d.minZ }; if d.maxZ > gMaxZ { gMaxZ = d.maxZ }
         }
 
-        guard totalTri > 0 else { throw Failure.emptyMesh }
-
-        return Result(
-            volumeMM3:      totalVol,
-            surfaceAreaMM2: totalSurf,
-            widthMM:  max(0, gMaxX - gMinX),
-            heightMM: max(0, gMaxY - gMinY),
-            depthMM:  max(0, gMaxZ - gMinZ),
-            triangleCount: totalTri,
-            vertexCount:   totalVerts,
-            plateCount:    plateCount
-        )
+        guard totalTri > 0 else { return nil }
+        return (totalVol, totalSurf, max(0, gMaxX - gMinX), max(0, gMaxY - gMinY), max(0, gMaxZ - gMinZ), totalTri, totalVerts)
     }
 
     // MARK: - Embedded thumbnail extraction

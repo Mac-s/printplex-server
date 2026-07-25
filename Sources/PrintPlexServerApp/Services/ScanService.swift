@@ -288,11 +288,14 @@ actor ScanService {
             let path = file.path
             // Lowest priority: mesh parsing is CPU-bound bulk work that should
             // never compete with request handling for cooperative-pool threads.
-            let parsed = try? await Task.detached(priority: .background) {
-                try ThreeMFParser.parse(URL(fileURLWithPath: path))
+            let plates = try? await Task.detached(priority: .background) {
+                try ThreeMFParser.parseAllPlates(URL(fileURLWithPath: path))
             }.value
-            guard let parsed else { continue }
-            file.meshStats = MeshStatsDTO(from: parsed, parsedAt: Date())
+            guard let plates, !plates.isEmpty else { continue }
+            let now = Date()
+            let stats = plates.map { MeshStatsDTO(from: $0, parsedAt: now) }
+            file.meshStats = stats.first { $0.plateIndex == 0 } ?? stats[0]
+            file.plateStats = stats.count > 1 ? stats : nil
             try await file.save(on: db)
             broadcast(ScanProgressEvent(type: "meshParsed", path: path))
         }
