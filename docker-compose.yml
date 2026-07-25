@@ -22,6 +22,12 @@ services:
       PRINTPLEX_MEDIA_PATH: /media
       PRINTPLEX_DATA_PATH: /data
       PRINTPLEX_SCAN_INTERVAL_MIN: "15"
+      # PUID/PGID (façon linuxserver.io) : l'utilisateur du conteneur adopte cet
+      # UID/GID au démarrage, pour lire/écrire /media et /data sans avoir à
+      # chown/chmod ces dossiers côté hôte. Mets l'UID/GID de l'utilisateur qui
+      # possède déjà ces dossiers sur ta machine (`id -u` / `id -g`).
+      PUID: "1000"
+      PGID: "1000"
       # Optionnel — intégration Shopify :
       SHOPIFY_STORE_DOMAIN: ${SHOPIFY_STORE_DOMAIN:-}
       SHOPIFY_ACCESS_TOKEN: ${SHOPIFY_ACCESS_TOKEN:-}

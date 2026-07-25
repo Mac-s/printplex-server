@@ -267,27 +267,37 @@ PRINTPLEX_MEDIA=/chemin/vers/media docker compose up -d --build
 ## Déploiement sur un serveur Docker distant
 
 `.github/workflows/docker-publish.yml` build et publie automatiquement l'image sur GitHub Container
-Registry (`ghcr.io`) à chaque push sur `main` — en multi-architecture (`linux/amd64` + `linux/arm64`),
-puisque le serveur cible peut être un NAS/mini-PC x86 comme un Raspberry Pi/NAS ARM. Le serveur
-distant n'a donc jamais besoin de compiler Swift lui-même : il se contente d'un `docker compose pull`.
+Registry (`ghcr.io`) à chaque push sur `main`, en multi-architecture (`linux/amd64` + `linux/arm64`,
+un job natif par architecture — un runner ARM64 hébergé par GitHub plutôt que l'émulation QEMU d'un
+buildx multi-platform classique, qui a fait grimper le temps de build à plus de 3h rien que pour le
+compilateur Swift). Le serveur cible n'a donc jamais besoin de compiler Swift lui-même : il se
+contente d'un `docker compose pull`. Le repo et le paquet GHCR sont publics, donc aucun `docker login`
+n'est nécessaire côté serveur distant.
 
-Sur le serveur distant, dans ta stack `docker-compose` existante :
+Exemple d'intégration à une stack `docker-compose` existante, avec des chemins hôte explicites plutôt
+que des volumes nommés Docker (plus simple à localiser/sauvegarder) :
 
 ```yaml
 services:
   printplex:
-    image: ghcr.io/<propriétaire>/<repo>:latest
+    image: ghcr.io/mac-s/printplex-server:latest
     container_name: printplex-server
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
-      - ${PRINTPLEX_MEDIA:-./Media}:/media
-      - printplex-data:/data
+      - /chemin/vers/tes/fichiers-3d:/media
+      - /chemin/vers/printplex-data:/data
     environment:
       PRINTPLEX_MEDIA_PATH: /media
       PRINTPLEX_DATA_PATH: /data
       PRINTPLEX_SCAN_INTERVAL_MIN: "15"
+      # PUID/PGID (façon linuxserver.io) : évite d'avoir à chown/chmod les
+      # dossiers ci-dessus sur l'hôte — voir "Utilisateur du conteneur" plus bas.
+      PUID: "1000"
+      PGID: "1000"
+      # Optionnel — configurable aussi depuis Réglages → Shopify dans l'interface,
+      # ces variables ne servent qu'à préremplir la toute première configuration :
       SHOPIFY_STORE_DOMAIN: ${SHOPIFY_STORE_DOMAIN:-}
       SHOPIFY_ACCESS_TOKEN: ${SHOPIFY_ACCESS_TOKEN:-}
     healthcheck:
@@ -295,18 +305,23 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-
-volumes:
-  printplex-data:
 ```
 
-Le paquet GHCR étant sur un repo privé, la première fois il faut aussi authentifier le démon Docker
-du serveur distant (un [personal access token](https://github.com/settings/tokens) avec le scope
-`read:packages` suffit) :
+### Utilisateur du conteneur (PUID/PGID)
 
-```bash
-echo "<token>" | docker login ghcr.io -u <utilisateur> --password-stdin
-```
+Le conteneur ne tourne pas en `root` — un utilisateur dédié (`printplex`) exécute le serveur. Sans
+rien configurer, cet utilisateur a un UID fixe décidé à la construction de l'image, ce qui provoque
+un `Permission denied` (et un crash au démarrage, volontaire — sans accès en écriture à `/data`, ni
+la base SQLite ni le cache de vignettes ne peuvent fonctionner) si les dossiers montés sur `/media`/
+`/data` appartiennent à un autre utilisateur sur l'hôte — le cas le plus courant étant que Docker les
+crée automatiquement en `root` s'ils n'existaient pas avant le premier lancement.
+
+`docker-entrypoint.sh` résout ça façon linuxserver.io : il démarre en `root`, réaligne l'UID/GID de
+l'utilisateur `printplex` sur `PUID`/`PGID`, puis bascule dessus (via `gosu`) avant de lancer le
+serveur — sans jamais toucher aux permissions des dossiers montés eux-mêmes. Mets simplement l'UID/GID
+de l'utilisateur qui possède déjà `/media`/`/data` côté hôte (`id -u` / `id -g` sur ton propre compte
+si c'est toi qui as créé ces dossiers) ; défaut `1000:1000` si non précisé (le premier utilisateur
+standard sur la plupart des installations Debian/Ubuntu).
 
 Mise à jour : `git push` sur `main` déclenche le build ; sur le serveur distant,
 `docker compose pull && docker compose up -d`.
