@@ -311,6 +311,18 @@ function projectsMatchingShopifyStatus(status) {
   return state.projects.filter((p) => shopifyStatusOf(p) === status);
 }
 
+/// Inverse of the "none" Shopify filter: products that exist on Shopify but
+/// that no project in the library currently matches (by explicit assignment
+/// or by name), i.e. products still needing a project on this side.
+function unmatchedShopifyProducts() {
+  const matchedIds = new Set();
+  for (const p of state.projects) {
+    const product = matchShopifyProduct(p.name, p.shopifyProductId);
+    if (product) matchedIds.add(product.id);
+  }
+  return state.shopifyProducts.filter((pr) => !matchedIds.has(pr.id));
+}
+
 function projectMatchesSearch(p, query) {
   if (!query) return true;
   const q = query.toLowerCase();
@@ -403,6 +415,7 @@ function renderSidebar() {
     if (counts.draft > 0) body += filterItemHtml({ icon: "◌", label: "Brouillon", count: counts.draft, active: state.filter.type === "shopify" && state.filter.value === "draft", action: "shopify", value: "draft" });
     if (counts.archived > 0) body += filterItemHtml({ icon: "📦", label: "Archivé", count: counts.archived, active: state.filter.type === "shopify" && state.filter.value === "archived", action: "shopify", value: "archived" });
     body += filterItemHtml({ icon: "➖", label: "Non synchronisé", count: counts.none, active: state.filter.type === "shopify" && state.filter.value === "none", action: "shopify", value: "none" });
+    body += filterItemHtml({ icon: "🧩", label: "Produits sans projet", count: unmatchedShopifyProducts().length, active: state.filter.type === "shopifyOrphans", action: "shopifyOrphans" });
     html += groupHtml("shopify", "Shopify", body);
   }
 
@@ -457,6 +470,7 @@ function wireSidebarEvents() {
       case "todo": setSingleFilter("todo"); break;
       case "kind": setSingleFilter("kind", btn.dataset.value); break;
       case "shopify": setSingleFilter("shopify", btn.dataset.value); break;
+      case "shopifyOrphans": setSingleFilter("shopifyOrphans"); break;
       case "multi": toggleMultiFilter(btn.dataset.key, btn.dataset.value); break;
       case "clear": clearMultiFilter(btn.dataset.key); break;
     }
@@ -563,6 +577,10 @@ function renderGrid() {
 
   if (state.filter.type === "kind") {
     renderKindFileList(detail, state.filter.value);
+    return;
+  }
+  if (state.filter.type === "shopifyOrphans") {
+    renderShopifyOrphansList(detail);
     return;
   }
 
@@ -690,6 +708,33 @@ function flatFileRowHtml(file) {
     </div>`;
 }
 
+// ── Shopify products with no matching project (inverse of the "none" filter) ──
+
+function renderShopifyOrphansList(detail) {
+  const orphans = unmatchedShopifyProducts();
+  detail.innerHTML = `
+    <div class="grid-section">
+      <div class="grid-section-header">
+        <div class="grid-section-title">🧩 Produits Shopify sans projet</div>
+        <div class="grid-section-count">${orphans.length}</div>
+      </div>
+      ${orphans.length === 0
+        ? `<div class="empty">Tous les produits synchronisés sont liés à un projet de la bibliothèque.</div>`
+        : `<div class="flat-file-list">${orphans.map((p) => shopifyOrphanRowHtml(p)).join("")}</div>`}
+    </div>`;
+}
+
+function shopifyOrphanRowHtml(product) {
+  const price = shopifyLowestPrice(product);
+  return `
+    <div class="flat-file-row">
+      <span class="dot ${product.status === "active" ? "on" : "off"}"></span>
+      <span class="ff-name">${escapeHtml(product.title)}</span>
+      <span class="ff-size">${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}${price != null ? ` · ${formatEur(price)}` : ""}</span>
+      <a class="btn btn-sm" href="https://${escapeHtml(state.shopifyStoreDomain)}/products/${escapeHtml(product.handle)}" target="_blank" rel="noopener">Voir</a>
+    </div>`;
+}
+
 // ── Unsorted files banner ──
 
 function unsortedSectionHtml() {
@@ -755,7 +800,7 @@ function projectCardHtml(project, opts = {}) {
         ${coverUrl
           ? `<img src="${coverUrl}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'cover-placeholder',textContent:'🧊'}))" />`
           : `<div class="cover-placeholder">🧊</div>`}
-        ${product ? `<div class="shopify-badge"><span class="dot ${product.isActive ? "on" : "off"}"></span>${escapeHtml(product.statusLabel)}</div>` : ""}
+        ${product ? `<div class="shopify-badge"><span class="dot ${product.status === "active" ? "on" : "off"}"></span>${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}</div>` : ""}
         ${opts.missing ? `<div class="missing-chips">${missingMetadataLabels(project).map((m) => `<span class="missing-chip">${escapeHtml(m)}</span>`).join("")}</div>` : ""}
       </div>
       <div class="card-body">
@@ -1292,7 +1337,7 @@ function shopifySectionHtml(project) {
       <div class="section-title">Shopify</div>
       ${product ? `
         <div class="shopify-match">
-          <span class="dot ${product.isActive ? "on" : "off"}"></span>
+          <span class="dot ${product.status === "active" ? "on" : "off"}"></span>
           <div class="shopify-match-body">
             <div class="shopify-match-title">${escapeHtml(product.title)}</div>
             <div class="shopify-match-meta">${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}${price != null ? ` · ${formatEur(price)}` : ""}</div>

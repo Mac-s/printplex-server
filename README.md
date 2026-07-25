@@ -247,6 +247,53 @@ PRINTPLEX_MEDIA_PATH=~/Mes/Fichiers3D swift run PrintPlexServerApp
 PRINTPLEX_MEDIA=/chemin/vers/media docker compose up -d --build
 ```
 
+## Déploiement sur un serveur Docker distant
+
+`.github/workflows/docker-publish.yml` build et publie automatiquement l'image sur GitHub Container
+Registry (`ghcr.io`) à chaque push sur `main` — en multi-architecture (`linux/amd64` + `linux/arm64`),
+puisque le serveur cible peut être un NAS/mini-PC x86 comme un Raspberry Pi/NAS ARM. Le serveur
+distant n'a donc jamais besoin de compiler Swift lui-même : il se contente d'un `docker compose pull`.
+
+Sur le serveur distant, dans ta stack `docker-compose` existante :
+
+```yaml
+services:
+  printplex:
+    image: ghcr.io/<propriétaire>/<repo>:latest
+    container_name: printplex-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${PRINTPLEX_MEDIA:-./Media}:/media
+      - printplex-data:/data
+    environment:
+      PRINTPLEX_MEDIA_PATH: /media
+      PRINTPLEX_DATA_PATH: /data
+      PRINTPLEX_SCAN_INTERVAL_MIN: "15"
+      SHOPIFY_STORE_DOMAIN: ${SHOPIFY_STORE_DOMAIN:-}
+      SHOPIFY_ACCESS_TOKEN: ${SHOPIFY_ACCESS_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  printplex-data:
+```
+
+Le paquet GHCR étant sur un repo privé, la première fois il faut aussi authentifier le démon Docker
+du serveur distant (un [personal access token](https://github.com/settings/tokens) avec le scope
+`read:packages` suffit) :
+
+```bash
+echo "<token>" | docker login ghcr.io -u <utilisateur> --password-stdin
+```
+
+Mise à jour : `git push` sur `main` déclenche le build ; sur le serveur distant,
+`docker compose pull && docker compose up -d`.
+
 ## Contenu du package
 
 | Module | Origine (app macOS) | Adaptation |
