@@ -143,6 +143,26 @@ final class LibraryScannerTests: XCTestCase {
         XCTAssertEqual(dict?["tags"] as? [String], ["deco"])
     }
 
+    /// Setting a known field back to nil must actually clear it on disk.
+    /// JSONEncoder's default Optional handling omits nil properties instead
+    /// of encoding `null`, which would make the merge silently keep stale
+    /// values — this pins the manual-dictionary fix in place.
+    func testUpdateProjectInfoClearsFieldSetToNil() throws {
+        let projectDir = root.appendingPathComponent("Groupe/Projet")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        let infoURL = projectDir.appendingPathComponent("info.json")
+        try Data(#"{"categorie": "Figurines", "createur": "Max"}"#.utf8).write(to: infoURL)
+
+        try LibraryScanner.updateProjectInfo(in: projectDir.path) { info in
+            info.categorie = nil
+        }
+
+        let dict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: infoURL)) as? [String: Any]
+        XCTAssertNil(dict?["categorie"])
+        XCTAssertEqual(dict?["createur"] as? String, "Max") // untouched field survives
+    }
+
     // MARK: - info.json generation
 
     func testGenerateProjectInfoDetectsMaterialsAndTags() {

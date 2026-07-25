@@ -3,8 +3,10 @@ import PrintPlexCore
 
 /// Server configuration, sourced from environment variables (docker-compose friendly).
 struct AppConfig: Sendable {
-    /// Root of the 3D print library (mounted volume in Docker).
-    let libraryPath: String
+    /// Generic mounted media root (one Docker volume, Plex-style) — individual
+    /// scan roots ("libraries") are folders under this, configured at runtime
+    /// via the Settings UI / `/api/libraries`, not via environment variables.
+    let mediaPath: String
     /// Where the server keeps its own state (SQLite DB, thumbnail cache).
     let dataPath: String
     /// Periodic rescan interval; 0 disables both the boot scan and the timer.
@@ -14,7 +16,7 @@ struct AppConfig: Sendable {
     let inMemoryDatabase: Bool
 
     static func fromEnvironment() -> AppConfig {
-        let library = Environment.get("PRINTPLEX_LIBRARY_PATH") ?? "./Library"
+        let media = Environment.get("PRINTPLEX_MEDIA_PATH") ?? "./Media"
         let data = Environment.get("PRINTPLEX_DATA_PATH") ?? "./data"
         let interval = Environment.get("PRINTPLEX_SCAN_INTERVAL_MIN").flatMap(Int.init) ?? 15
 
@@ -24,7 +26,7 @@ struct AppConfig: Sendable {
         )
 
         return AppConfig(
-            libraryPath: URL(fileURLWithPath: library).standardizedFileURL.path,
+            mediaPath: URL(fileURLWithPath: media).standardizedFileURL.path,
             dataPath: URL(fileURLWithPath: data).standardizedFileURL.path,
             scanIntervalMinutes: interval,
             shopifyCredentials: credentials.isConfigured ? credentials : nil,

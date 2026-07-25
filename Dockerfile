@@ -14,7 +14,9 @@ FROM swift:6.1-noble-slim
 RUN useradd --create-home printplex
 WORKDIR /app
 COPY --from=build /build/.build/release/PrintPlexServerApp /app/
+COPY Public /app/Public
 
+RUN chown -R printplex:printplex /app
 USER printplex
 EXPOSE 8080
 

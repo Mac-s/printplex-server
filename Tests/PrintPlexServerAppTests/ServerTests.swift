@@ -4,24 +4,24 @@ import PrintPlexCore
 
 final class ServerTests: XCTestCase {
     var app: Application!
-    var libraryDir: URL!
+    var mediaDir: URL!
     var dataDir: URL!
 
     override func setUp() async throws {
         let base = FileManager.default.temporaryDirectory
-        libraryDir = base.appendingPathComponent("printplex-server-lib-\(UUID().uuidString)")
+        mediaDir = base.appendingPathComponent("printplex-server-media-\(UUID().uuidString)")
         dataDir = base.appendingPathComponent("printplex-server-data-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: libraryDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
 
         // Library fixture: Groupe/Cube/{cube.3mf, info.json, rendu.png}
-        let projectDir = libraryDir.appendingPathComponent("Groupe/Cube")
+        let projectDir = mediaDir.appendingPathComponent("Groupe/Cube")
         try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
         try TestZip.cube3MF().write(to: projectDir.appendingPathComponent("cube.3mf"))
         try Data(#"{"nom": "Cube Test", "categorie": "Tests"}"#.utf8)
             .write(to: projectDir.appendingPathComponent("info.json"))
         try Data("fake png".utf8).write(to: projectDir.appendingPathComponent("rendu.png"))
 
-        setenv("PRINTPLEX_LIBRARY_PATH", libraryDir.path, 1)
+        setenv("PRINTPLEX_MEDIA_PATH", mediaDir.path, 1)
         setenv("PRINTPLEX_DATA_PATH", dataDir.path, 1)
         setenv("PRINTPLEX_DB_IN_MEMORY", "1", 1)
         setenv("PRINTPLEX_SCAN_INTERVAL_MIN", "0", 1)
@@ -36,8 +36,19 @@ final class ServerTests: XCTestCase {
     override func tearDown() async throws {
         try await app.asyncShutdown()
         app = nil
-        try? FileManager.default.removeItem(at: libraryDir)
+        try? FileManager.default.removeItem(at: mediaDir)
         try? FileManager.default.removeItem(at: dataDir)
+    }
+
+    /// Registers the whole media root as a single library — like a user
+    /// picking "the whole mount" as their one library in Settings. Libraries
+    /// are Plex-style: nothing is scanned until at least one is configured.
+    private func addLibrary(name: String = "Bibliothèque", relativePath: String = "") async throws {
+        try await app.test(.POST, "api/libraries", beforeRequest: { req in
+            try req.content.encode(LibraryCreateRequest(name: name, relativePath: relativePath))
+        }, afterResponse: { res async in
+            XCTAssertEqual(res.status, .ok)
+        })
     }
 
     // MARK: - Tests
@@ -61,6 +72,8 @@ final class ServerTests: XCTestCase {
     }
 
     func testFullScanFlow() async throws {
+        try await addLibrary()
+
         // 1. Scan (synchronous — includes the mesh parsing pass)
         try await app.test(.POST, "api/scan?wait=true") { res async throws in
             XCTAssertEqual(res.status, .ok)
@@ -102,6 +115,20 @@ final class ServerTests: XCTestCase {
             XCTAssertTrue(estimate.fitsOnBed)
         }
 
+        // 4b. Manual work level persists per file (mirrors the macOS detail
+        // view's per-file difficulty picker, stored in printParams)
+        try await app.test(.PATCH, "api/files/\(fileID)", beforeRequest: { req in
+            try req.content.encode(FileUpdateRequest(manualWorkLevel: "medium"))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let file = try res.content.decode(FileDTO.self)
+            XCTAssertEqual(file.printParams?.manualWorkLevel, "medium")
+        })
+        try await app.test(.GET, "api/files/\(fileID)") { res async throws in
+            let file = try res.content.decode(FileDTO.self)
+            XCTAssertEqual(file.printParams?.manualWorkLevel, "medium")
+        }
+
         // 5. Project-level estimate aggregates the parts
         try await app.test(.GET, "api/projects/\(id)/estimate?manualWork=easy") { res async throws in
             let estimate = try res.content.decode(PrintEstimate.self)
@@ -112,9 +139,39 @@ final class ServerTests: XCTestCase {
         try await app.test(.GET, "api/files/\(fileID)/download") { res async in
             XCTAssertEqual(res.status, .ok)
         }
+
+        // 7. List endpoint precomputes cover image + counts for the grid view
+        try await app.test(.GET, "api/projects") { res async throws in
+            let project = try XCTUnwrap(try res.content.decode([ProjectDTO].self).first)
+            XCTAssertEqual(project.partsCount, 1)       // cube.3mf
+            XCTAssertEqual(project.totalFileCount, 3)   // + info.json + rendu.png
+            XCTAssertEqual(project.imageCount, 1)       // rendu.png
+            XCTAssertNotNil(project.coverFileId)
+        }
+
+        // 8. Flat file listing across the library, filterable by kind
+        // (kind uses FileKind's rawValue, e.g. "threeMF" — not the file extension)
+        try await app.test(.GET, "api/files?kind=threeMF") { res async throws in
+            let files = try res.content.decode([FileDTO].self)
+            XCTAssertEqual(files.count, 1)
+            XCTAssertEqual(files.first?.fileName, "cube")
+        }
+        try await app.test(.GET, "api/files") { res async throws in
+            let files = try res.content.decode([FileDTO].self)
+            XCTAssertEqual(files.count, 3)
+        }
+
+        // 9. Aggregate kind counts for the sidebar badges
+        try await app.test(.GET, "api/files/stats") { res async throws in
+            let stats = try res.content.decode(FileKindCounts.self)
+            XCTAssertEqual(stats.threeMF, 1)
+            XCTAssertEqual(stats.other, 2) // info.json + rendu.png (kind, not role)
+            XCTAssertEqual(stats.unsorted, 0)
+        }
     }
 
     func testPatchProjectUpdatesInfoJson() async throws {
+        try await addLibrary()
         try await app.test(.POST, "api/scan?wait=true")
 
         var projectID: UUID?
@@ -136,12 +193,40 @@ final class ServerTests: XCTestCase {
         })
 
         // The folder's info.json is updated too (library = source of truth)
-        let infoURL = libraryDir.appendingPathComponent("Groupe/Cube/info.json")
+        let infoURL = mediaDir.appendingPathComponent("Groupe/Cube/info.json")
         let dict = try JSONSerialization.jsonObject(
             with: Data(contentsOf: infoURL)) as? [String: Any]
         XCTAssertEqual(dict?["description"] as? String, "Un cube de test")
         XCTAssertEqual(dict?["tags"] as? [String], ["calibration"])
         XCTAssertEqual(dict?["categorie"] as? String, "Tests")  // preserved
+    }
+
+    /// `category`/`creator` are plain `String?` — JSON can't distinguish
+    /// "omitted" from "explicitly null" there, so an empty string is the
+    /// sidebar's "Supprimer" convention for clearing the field.
+    func testPatchWithEmptyStringClearsCategoryAndCreator() async throws {
+        try await addLibrary()
+        try await app.test(.POST, "api/scan?wait=true")
+        var projectID: UUID?
+        try await app.test(.GET, "api/projects") { res async throws in
+            let project = try res.content.decode([ProjectDTO].self).first
+            projectID = project?.id
+            XCTAssertEqual(project?.category, "Tests")
+        }
+        let id = try XCTUnwrap(projectID)
+
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(category: "", creator: ""))
+        }, afterResponse: { res async throws in
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertNil(project.category)
+            XCTAssertNil(project.creator)
+        })
+
+        let infoURL = mediaDir.appendingPathComponent("Groupe/Cube/info.json")
+        let dict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: infoURL)) as? [String: Any]
+        XCTAssertNil(dict?["categorie"])
     }
 
     func testScanStatusEndpoint() async throws {

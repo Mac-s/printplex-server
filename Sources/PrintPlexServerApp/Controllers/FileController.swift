@@ -2,16 +2,49 @@ import Vapor
 import Fluent
 import PrintPlexCore
 
+struct FileKindCounts: Content {
+    var stl: Int
+    var threeMF: Int
+    var obj: Int
+    var step: Int
+    var other: Int
+    var unsorted: Int
+}
+
+/// Only `manualWorkLevel` is ever set from the UI (mirrors the macOS detail
+/// view's per-file difficulty picker) — the other PrintParams fields aren't
+/// user-editable anywhere yet.
+struct FileUpdateRequest: Content {
+    var manualWorkLevel: String?
+}
+
 struct FileController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let files = routes.grouped("api", "files")
+        files.get(use: index)
         files.get("unsorted", use: unsorted)
+        files.get("stats", use: stats)
         files.group(":fileID") { file in
             file.get(use: detail)
+            file.patch(use: update)
             file.get("download", use: download)
             file.get("thumbnail", use: thumbnail)
             file.get("estimate", use: estimate)
         }
+    }
+
+    /// Flat file listing across the whole library (all projects + unsorted),
+    /// optionally filtered by kind — backs the sidebar's "Types 3D" section,
+    /// which (like the macOS app's equivalent list) shows files without their
+    /// project context.
+    @Sendable
+    func index(req: Request) async throws -> [FileDTO] {
+        var query = FileModel.query(on: req.db)
+        if let kindRaw = try? req.query.get(String.self, at: "kind"), !kindRaw.isEmpty {
+            query = query.filter(\.$kindRaw == kindRaw)
+        }
+        let models = try await query.sort(\.$fileName).all()
+        return models.map { $0.toDTO() }
     }
 
     @Sendable
@@ -23,9 +56,40 @@ struct FileController: RouteCollection {
         return models.map { $0.toDTO() }
     }
 
+    /// Counts backing the sidebar badges — kept as a single aggregate query
+    /// rather than making the client fetch every file just to count them.
+    @Sendable
+    func stats(req: Request) async throws -> FileKindCounts {
+        async let stl = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.stl.rawValue).count()
+        async let threeMF = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.threeMF.rawValue).count()
+        async let obj = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.obj.rawValue).count()
+        async let step = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.step.rawValue).count()
+        async let other = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.other.rawValue).count()
+        async let unsorted = FileModel.query(on: req.db).filter(\.$project.$id == .null).count()
+        return try await FileKindCounts(
+            stl: stl, threeMF: threeMF, obj: obj, step: step, other: other, unsorted: unsorted
+        )
+    }
+
     @Sendable
     func detail(req: Request) async throws -> FileDTO {
         try await find(req).toDTO()
+    }
+
+    /// Persists the per-file manual-work (difficulty) level chosen in the
+    /// print estimate section — same field the macOS app writes to
+    /// `file.printParams.manualWorkLevel` in SwiftData.
+    @Sendable
+    func update(req: Request) async throws -> FileDTO {
+        let file = try await find(req)
+        let body = try req.content.decode(FileUpdateRequest.self)
+        if let level = body.manualWorkLevel {
+            var params = file.printParams ?? PrintParamsDTO()
+            params.manualWorkLevel = level
+            file.printParams = params
+        }
+        try await file.save(on: req.db)
+        return file.toDTO()
     }
 
     @Sendable
@@ -84,7 +148,7 @@ struct FileController: RouteCollection {
         guard let stats = file.meshStats else {
             throw Abort(.conflict, reason: "Pas de statistiques de maillage — lancez un scan d'abord")
         }
-        let (printer, material, settings, manual) = try EstimateSupport.inputs(from: req)
+        let (printer, material, settings, manual) = try await EstimateSupport.inputs(from: req)
         return PrintEstimator.estimate(
             parsed: EstimateSupport.parserResult(from: stats),
             printer: printer, material: material,
@@ -102,11 +166,12 @@ struct FileController: RouteCollection {
         return model
     }
 
-    /// Defense in depth: never serve anything outside the library root.
+    /// Defense in depth: never serve anything outside the mounted media root
+    /// (every configured library lives under it, by construction).
     private func safePath(for file: FileModel, in config: AppConfig) throws -> String {
         let standardized = URL(fileURLWithPath: file.path).standardizedFileURL.path
-        guard standardized.hasPrefix(config.libraryPath + "/") else {
-            throw Abort(.forbidden, reason: "Chemin hors de la bibliothèque")
+        guard standardized == config.mediaPath || standardized.hasPrefix(config.mediaPath + "/") else {
+            throw Abort(.forbidden, reason: "Chemin hors du répertoire média")
         }
         return standardized
     }

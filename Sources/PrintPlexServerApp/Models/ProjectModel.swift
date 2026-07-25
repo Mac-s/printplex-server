@@ -40,7 +40,8 @@ final class ProjectModel: Model, @unchecked Sendable {
         if let sid = info.shopify_product_id { shopifyProductId = sid }
     }
 
-    func toDTO(files: [FileDTO]? = nil) -> ProjectDTO {
+    func toDTO(files: [FileDTO]? = nil, coverFileId: UUID? = nil,
+               partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0) -> ProjectDTO {
         ProjectDTO(
             id: id ?? UUID(),
             name: name,
@@ -56,7 +57,26 @@ final class ProjectModel: Model, @unchecked Sendable {
             multiColor: multiColor,
             notes: notes,
             shopifyProductId: shopifyProductId,
-            files: files
+            files: files,
+            coverFileId: coverFileId,
+            partsCount: partsCount,
+            totalFileCount: totalFileCount,
+            imageCount: imageCount
         )
+    }
+
+    /// Picks the cover file the same way the macOS app does:
+    /// explicit `coverImageFileName` match > first render image > first model part.
+    /// Also returns the counts the grid cards need, computed from the same file set.
+    func coverAndCounts(from files: [FileModel]) -> (coverFileId: UUID?, partsCount: Int, totalFileCount: Int, imageCount: Int) {
+        let images = files.filter { $0.fileRoleRaw == FileRole.renderImage.rawValue }
+        let chosen = coverImageFileName.flatMap { name in
+            images.first { "\($0.fileName).\($0.fileExtension)" == name }
+        }
+        let cover = chosen
+            ?? images.first
+            ?? files.first { $0.fileRoleRaw == FileRole.modelPart.rawValue }
+        let partsCount = files.filter { $0.fileRoleRaw == FileRole.modelPart.rawValue }.count
+        return (cover?.id, partsCount, files.count, images.count)
     }
 }

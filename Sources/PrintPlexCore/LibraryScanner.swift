@@ -55,7 +55,17 @@ public enum LibraryScanner {
         let rootPath = root.standardizedFileURL.path
 
         return AsyncStream { continuation in
-            Task.detached {
+            // `Task.detached` never inherits the priority of its caller (unlike
+            // plain `Task { }`), so this needs its own explicit low priority —
+            // setting it on the caller's task alone wouldn't reach here. Full
+            // recursive filesystem enumeration is exactly the kind of bulk
+            // work that should never compete with request handling for
+            // cooperative-thread-pool time. Currently only the server (which
+            // wants this) drives this function — the macOS app still has its
+            // own separate ScannerService.swift — so revisit this if/when the
+            // app is migrated onto PrintPlexCore and gets its own manual-scan
+            // caller with different responsiveness expectations.
+            Task.detached(priority: .background) {
                 let fm = FileManager.default
 
                 // --- Pass 1: Enumerate ALL files recursively ---
@@ -303,13 +313,28 @@ public enum LibraryScanner {
         // Apply the mutation
         update(&info)
 
-        // Merge known fields back into the dictionary
-        let encoder = JSONEncoder()
-        let infoData = try encoder.encode(info)
-        if let infoDict = try JSONSerialization.jsonObject(with: infoData) as? [String: Any] {
-            for (key, value) in infoDict {
-                dict[key] = value
-            }
+        // Merge known fields back into the dictionary. Built manually field by
+        // field rather than round-tripping through JSONEncoder: Swift's default
+        // Encodable synthesis calls encodeIfPresent for Optional properties,
+        // which *omits* nil values from the output instead of encoding `null`.
+        // That would mean `update` clearing a field back to nil never reaches
+        // the file — the merge loop would just never see that key and the old
+        // value on disk would stick around forever.
+        let knownFields: [String: Any?] = [
+            "nom": info.nom,
+            "description": info.description,
+            "categorie": info.categorie,
+            "createur": info.createur,
+            "tags": info.tags,
+            "fichiers": info.fichiers,
+            "materiaux_suggeres": info.materiaux_suggeres,
+            "multi_couleur": info.multi_couleur,
+            "notes": info.notes,
+            "image_principale": info.image_principale,
+            "shopify_product_id": info.shopify_product_id,
+        ]
+        for (key, value) in knownFields {
+            dict[key] = value ?? NSNull()
         }
 
         // Remove null entries for cleanliness

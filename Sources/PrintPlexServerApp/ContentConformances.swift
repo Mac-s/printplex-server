@@ -8,3 +8,5 @@ extension PrintEstimate: Content {}
 extension ShopifyProduct: Content {}
 extension PrinterProfile: Content {}
 extension PrintMaterial: Content {}
+extension ScanSettings: Content {}
+extension LibraryDTO: Content {}

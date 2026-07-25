@@ -125,13 +125,21 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
     /// Populated on detail endpoints; nil on list endpoints.
     public var files: [FileDTO]?
 
+    // Precomputed by the server (from the project's files) so the grid view
+    // can render cards without fetching each project's detail individually.
+    public var coverFileId: UUID?
+    public var partsCount: Int
+    public var totalFileCount: Int
+    public var imageCount: Int
+
     public init(id: UUID = UUID(), name: String, folderPath: String,
                 lastModifiedAt: Date = Date(), dateAdded: Date = Date(),
                 coverImageFileName: String? = nil, projectDescription: String? = nil,
                 category: String? = nil, creator: String? = nil, tags: [String] = [],
                 suggestedMaterials: [String] = [], multiColor: Bool? = nil,
                 notes: String? = nil, shopifyProductId: String? = nil,
-                files: [FileDTO]? = nil) {
+                files: [FileDTO]? = nil, coverFileId: UUID? = nil,
+                partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0) {
         self.id = id
         self.name = name
         self.folderPath = folderPath
@@ -145,7 +153,28 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
         self.suggestedMaterials = suggestedMaterials
         self.multiColor = multiColor
         self.notes = notes
+        self.coverFileId = coverFileId
+        self.partsCount = partsCount
+        self.totalFileCount = totalFileCount
+        self.imageCount = imageCount
         self.shopifyProductId = shopifyProductId
         self.files = files
+    }
+}
+
+/// A configured scan root (Plex-style "library") — a folder under the
+/// server's generic mounted media root, added/removed from Settings.
+public struct LibraryDTO: Codable, Sendable, Identifiable {
+    public var id: UUID
+    public var name: String
+    /// Relative to the server's media root — never an absolute host path.
+    public var relativePath: String
+    public var dateAdded: Date
+
+    public init(id: UUID = UUID(), name: String, relativePath: String, dateAdded: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.relativePath = relativePath
+        self.dateAdded = dateAdded
     }
 }

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PrintPlex Server</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-icon">🧊</span>
+    <span class="brand-name">PrintPlex</span>
+    <span class="brand-tag">Server</span>
+  </div>
+  <input class="search" id="searchInput" placeholder="Rechercher…" />
+  <div class="stats" id="stats">
+    <div class="stat"><span class="stat-value" id="statProjects">–</span><span class="stat-label">projets</span></div>
+    <div class="stat"><span class="stat-value" id="statFiles">–</span><span class="stat-label">fichiers</span></div>
+    <div class="stat"><span class="stat-value" id="statScan">–</span><span class="stat-label">dernier scan</span></div>
+  </div>
+  <div class="actions">
+    <span class="pill" id="scanPill">inactif</span>
+    <button class="btn btn-primary" id="btnScan">Lancer un scan</button>
+    <button class="btn" id="btnSettings">⚙️ Réglages</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-scroll">
+      <nav class="filter-nav" id="filterNav"></nav>
+      <div class="scan-log" id="scanLog"><div class="empty">En attente d'évènements…</div></div>
+    </div>
+  </aside>
+
+  <main class="detail" id="detail">
+    <div class="placeholder">
+      <p>Chargement de la bibliothèque…</p>
+    </div>
+  </main>
+</div>
+
+<script src="/viewer.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

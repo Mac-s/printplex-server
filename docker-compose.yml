@@ -6,13 +6,20 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # ⚠️ La bibliothèque doit être un dossier accessible au démon Docker
-      # (disque local, NAS…) — PAS iCloud Drive. Lecture-écriture car le
-      # serveur maintient les info.json des projets.
-      - ${PRINTPLEX_LIBRARY:-./Library}:/library
+      # ⚠️ Un seul point de montage générique (façon Plex) — PAS iCloud Drive,
+      # un dossier accessible au démon Docker (disque local, NAS…).
+      # Lecture-écriture : le serveur maintient les info.json des projets.
+      # Les bibliothèques elles-mêmes (quels sous-dossiers scanner) se
+      # configurent ensuite depuis Réglages → Bibliothèque dans l'interface web.
+      - ${PRINTPLEX_MEDIA:-./Media}:/media
+      # Plusieurs disques/emplacements séparés ? Montez-les chacun sous /media
+      # (comme Plex) plutôt qu'ailleurs — chaque bibliothèque ajoutée depuis
+      # Réglages doit rester sous ce seul point de montage :
+      #   - /mnt/nas/Figurines:/media/Figurines
+      #   - /mnt/disque2/Posters:/media/Posters
       - printplex-data:/data
     environment:
-      PRINTPLEX_LIBRARY_PATH: /library
+      PRINTPLEX_MEDIA_PATH: /media
       PRINTPLEX_DATA_PATH: /data
       PRINTPLEX_SCAN_INTERVAL_MIN: "15"
       # Optionnel — intégration Shopify :

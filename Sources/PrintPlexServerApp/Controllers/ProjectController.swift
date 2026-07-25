@@ -37,7 +37,21 @@ struct ProjectController: RouteCollection {
         let models = try await ProjectModel.query(on: req.db)
             .sort(\.$lastModifiedAt, .descending)
             .all()
-        return models.map { $0.toDTO() }
+
+        // One query for every project's files (instead of one query per
+        // project) so cover image + part/file counts stay cheap even with
+        // many projects — the grid view needs these on every card.
+        let allProjectFiles = try await FileModel.query(on: req.db)
+            .filter(\.$project.$id != nil)
+            .all()
+        let filesByProject = Dictionary(grouping: allProjectFiles) { $0.$project.id! }
+
+        return models.map { model in
+            let files = filesByProject[model.id!] ?? []
+            let (coverFileId, partsCount, totalFileCount, imageCount) = model.coverAndCounts(from: files)
+            return model.toDTO(coverFileId: coverFileId, partsCount: partsCount,
+                              totalFileCount: totalFileCount, imageCount: imageCount)
+        }
     }
 
     @Sendable
@@ -47,7 +61,9 @@ struct ProjectController: RouteCollection {
             .filter(\.$project.$id == model.requireID())
             .sort(\.$fileName)
             .all()
-        return model.toDTO(files: files.map { $0.toDTO() })
+        let (coverFileId, partsCount, totalFileCount, imageCount) = model.coverAndCounts(from: files)
+        return model.toDTO(files: files.map { $0.toDTO() }, coverFileId: coverFileId,
+                          partsCount: partsCount, totalFileCount: totalFileCount, imageCount: imageCount)
     }
 
     /// Updates project metadata in the DB **and** in the folder's info.json,
@@ -57,10 +73,15 @@ struct ProjectController: RouteCollection {
         let model = try await find(req)
         let body = try req.content.decode(ProjectUpdateRequest.self)
 
+        // `String?` can't distinguish "field omitted" from "explicitly cleared"
+        // over JSON — both decode to nil. So for category/creator, an empty
+        // string is the client's way of asking to clear the field (the "À
+        // faire" incomplete-metadata check already treats empty as missing,
+        // and this is what the sidebar's "Supprimer" context menu sends).
         if let v = body.name { model.name = v }
         if let v = body.projectDescription { model.projectDescription = v }
-        if let v = body.category { model.category = v }
-        if let v = body.creator { model.creator = v }
+        if let v = body.category { model.category = v.isEmpty ? nil : v }
+        if let v = body.creator { model.creator = v.isEmpty ? nil : v }
         if let v = body.tags { model.tags = v }
         if let v = body.suggestedMaterials { model.suggestedMaterials = v }
         if let v = body.multiColor { model.multiColor = v }
@@ -72,8 +93,8 @@ struct ProjectController: RouteCollection {
         try LibraryScanner.updateProjectInfo(in: model.folderPath) { info in
             if let v = body.name { info.nom = v }
             if let v = body.projectDescription { info.description = v }
-            if let v = body.category { info.categorie = v }
-            if let v = body.creator { info.createur = v }
+            if let v = body.category { info.categorie = v.isEmpty ? nil : v }
+            if let v = body.creator { info.createur = v.isEmpty ? nil : v }
             if let v = body.tags { info.tags = v }
             if let v = body.suggestedMaterials { info.materiaux_suggeres = v }
             if let v = body.multiColor { info.multi_couleur = v }
@@ -93,7 +114,7 @@ struct ProjectController: RouteCollection {
             .filter(\.$project.$id == model.requireID())
             .all()
 
-        let (printer, material, settings, manual) = try EstimateSupport.inputs(from: req)
+        let (printer, material, settings, manual) = try await EstimateSupport.inputs(from: req)
 
         let estimates = files.compactMap { file -> PrintEstimate? in
             guard file.fileRole == .modelPart, let stats = file.meshStats else { return nil }
@@ -129,13 +150,17 @@ struct ProjectController: RouteCollection {
             throw Abort(.serviceUnavailable, reason: "Shopify non configuré (SHOPIFY_STORE_DOMAIN / SHOPIFY_ACCESS_TOKEN)")
         }
         let model = try await find(req)
-        _ = try await cache.productsSyncingIfNeeded()
+        do {
+            _ = try await cache.productsSyncingIfNeeded()
+        } catch {
+            throw ShopifyController.abortify(error)
+        }
         guard let product = await cache.match(projectName: model.name,
                                               explicitProductId: model.shopifyProductId) else {
             throw Abort(.notFound, reason: "Aucun produit Shopify correspondant")
         }
         return ShopifyMatchResponse(product: product,
-                                    url: cache.url(for: product)?.absoluteString)
+                                    url: await cache.url(for: product)?.absoluteString)
     }
 
     private func find(_ req: Request) async throws -> ProjectModel {

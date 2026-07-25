@@ -1,4 +1,5 @@
 import Vapor
+import Fluent
 import PrintPlexCore
 
 struct EstimateQuery: Content {
@@ -11,30 +12,31 @@ struct EstimateQuery: Content {
 }
 
 enum EstimateSupport {
-    /// Printers and materials are the package defaults for now — per-user
-    /// profiles move server-side in a later phase.
-    static func inputs(from req: Request) throws
+    /// Printers and materials are user-editable via the settings API
+    /// (PrinterModel/MaterialModel) — this looks them up by id, falling back
+    /// to the first configured one (by sortOrder) when none is specified.
+    static func inputs(from req: Request) async throws
         -> (PrinterProfile, PrintMaterial, PrintSettings, ManualWorkLevel) {
         let query = try req.query.decode(EstimateQuery.self)
 
-        let printer: PrinterProfile
+        let printerModel: PrinterModel?
         if let id = query.printerId {
-            guard let found = PrinterProfile.defaults.first(where: { $0.id == id }) else {
-                throw Abort(.notFound, reason: "Imprimante inconnue")
-            }
-            printer = found
+            printerModel = try await PrinterModel.find(id, on: req.db)
         } else {
-            printer = PrinterProfile.defaults[0]
+            printerModel = try await PrinterModel.query(on: req.db).sort(\.$sortOrder).first()
+        }
+        guard let printerModel else {
+            throw Abort(.notFound, reason: "Imprimante inconnue")
         }
 
-        let material: PrintMaterial
+        let materialModel: MaterialModel?
         if let id = query.materialId {
-            guard let found = PrintMaterial.defaults.first(where: { $0.id == id }) else {
-                throw Abort(.notFound, reason: "Matériau inconnu")
-            }
-            material = found
+            materialModel = try await MaterialModel.find(id, on: req.db)
         } else {
-            material = PrintMaterial.defaults[0]
+            materialModel = try await MaterialModel.query(on: req.db).sort(\.$sortOrder).first()
+        }
+        guard let materialModel else {
+            throw Abort(.notFound, reason: "Matériau inconnu")
         }
 
         var settings = PrintSettings()
@@ -43,7 +45,7 @@ enum EstimateSupport {
         if let v = query.infillPercent { settings.infillPercent = v }
 
         let manual = query.manualWork.flatMap(ManualWorkLevel.init(rawValue:)) ?? .aucun
-        return (printer, material, settings, manual)
+        return (printerModel.toDTO(), materialModel.toDTO(), settings, manual)
     }
 
     static func parserResult(from stats: MeshStatsDTO) -> ThreeMFParser.Result {
