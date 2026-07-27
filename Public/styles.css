@@ -742,6 +742,31 @@ button.entity-row:hover { border-color: var(--accent); }
 .chip-editor { margin-bottom: 12px; }
 .chip-editor:last-child { margin-bottom: 0; }
 .chip-editor > label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 5px; }
+
+.dup-metafield-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.dup-metafield-key {
+  flex: 0 0 auto;
+  min-width: 90px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.dup-metafield-value {
+  flex: 1;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+}
 .chip-list { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .chip-list .chip { display: inline-flex; align-items: center; gap: 5px; }
 .chip-material { background: rgba(224, 133, 26, .15); color: #d17a1f; }

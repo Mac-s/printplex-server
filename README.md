@@ -211,6 +211,28 @@ partir des champs bruts (`printTimeSeconds`, `filamentWeightG`…) ; **tout futu
 devra faire pareil**, ou alors il faudra ajouter un `CodingKeys`/DTO explicite côté serveur qui les
 inclut.
 
+### Dossiers de service NAS ignorés (Synology & co)
+
+Trouvé en conditions réelles (bibliothèque montée depuis un NAS Synology en NFS) : `@eaDir`,
+`@SynoResource`, `#recycle`… apparaissent à *chaque* niveau de l'arborescence sur un partage Synology
+(caches de vignettes, corbeille par dossier partagé) — jamais du vrai contenu, mais `LibraryScanner`
+les remontait comme fichiers "non triés" puisque `.skipsHiddenFiles` ne filtre que les fichiers
+commençant par un point, pas ces dossiers-là. `LibraryScanner.ignoredFolderNames` liste maintenant ces
+noms ; l'énumération est passée d'un `for`/`compactMap` sucré à une boucle manuelle
+(`enumerator.nextObject()`) pour pouvoir appeler `skipDescendants()` dès qu'un de ces dossiers est
+rencontré — évite de parcourir pour rien un `@eaDir` qui peut contenir des milliers de miniatures
+mises en cache par le NAS, pas juste filtrer après coup. Un rescan après mise à jour retire
+automatiquement les entrées déjà indexées (même mécanisme que pour un fichier supprimé : elles ne
+réapparaissent simplement plus dans les fichiers "vus" du scan).
+
+Repéré juste après (mêmes conditions réelles) : des fichiers `nomoriginal@SynoEAStream` — pas un
+dossier cette fois, un **suffixe par fichier** : Synology stocke les attributs étendus (métadonnées
+Finder, resource forks…) d'un fichier dans un fichier compagnon séparé quand le partage est servi en
+NFS/SMB plutôt qu'en AFP natif, qui lui les transporte en ligne. Comme le nom exact varie (préfixé par
+le nom du fichier d'origine), un ensemble de noms exacts ne suffit pas — `LibraryScanner.ignoredFileSuffixes`
+filtre par `hasSuffix` (comparaison insensible à la casse, les clients NFS/SMB ne s'accordant pas
+toujours dessus) en plus du filtre par nom exact des dossiers.
+
 ## API du serveur
 
 | Méthode | Route | Description |
@@ -227,13 +249,15 @@ inclut.
 | GET | `/api/files/:id` | Détail d'un fichier |
 | GET | `/api/files/:id/download` | Téléchargement (chemin validé sous la racine bibliothèque) |
 | GET | `/api/files/:id/thumbnail` | Vignette : image servie telle quelle, ou PNG embarqué du .3mf (extrait + mis en cache) |
-| GET | `/api/files/:id/estimate` | Estimation d'impression (`?printerId=&materialId=&layerHeightMM=&infillPercent=&shellCount=&manualWork=`) |
+| GET | `/api/files/:id/estimate` | Estimation d'impression (`?printerId=&materialId=&layerHeightMM=&infillPercent=&shellCount=&manualWork=&plateIndex=`) |
 | POST | `/api/scan` | Déclenche un scan (`?wait=true` pour bloquer jusqu'à la fin) |
 | GET | `/api/scan/status` | État du scan + compteurs |
 | GET | `/api/scan/events` | **SSE** : progression du scan en temps réel |
 | GET/POST | `/api/printers` · PATCH/DELETE `/api/printers/:id` | CRUD imprimantes (seedées depuis les défauts, éditables) |
 | GET | `/api/materials` · PATCH `/api/materials/:id` | Catalogue matériaux (prix/kg éditable, catalogue fixe) |
-| GET/POST | `/api/shopify/products` · `/api/shopify/sync` | Cache produits Shopify côté serveur |
+| GET | `/api/shopify/products` | Cache produits Shopify côté serveur (description, tags, type, métadonnées inclus) |
+| POST | `/api/shopify/products` | Crée un produit (`{title, bodyHtml?, vendor?, productType?, tags?, price?, metafields?}`), toujours en brouillon — valeurs prises telles quelles, aucune copie côté serveur |
+| POST | `/api/shopify/sync` | Resynchronise le cache produits |
 | GET | `/api/settings` | Vue d'ensemble des réglages (scan, Shopify, chemins) |
 | PATCH | `/api/settings/scan` | Active/désactive le scan auto + intervalle (effectif sans redémarrage) |
 | GET/PUT | `/api/settings/shopify` | Lecture/écriture des credentials Shopify (persistés en base) |
@@ -243,6 +267,30 @@ inclut.
 Le serveur scanne au démarrage puis rescanne périodiquement (`PRINTPLEX_SCAN_INTERVAL_MIN`,
 défaut 15 min, 0 pour désactiver). Les `.3mf` nouveaux ou modifiés passent ensuite au parsing de
 maillage (volume, surface, bounding box) pour alimenter les estimations.
+
+### Shopify : données étendues + duplication de fiches produit
+
+`ShopifyClient.fetchAllProducts()` (`Sources/PrintPlexCore/ShopifyClient.swift`) récupère désormais,
+en plus de `id`/`title`/`status`/`handle`/`variants` : `body_html` (description), `tags` (chaîne
+brute séparée par des virgules côté API Shopify — `tagList` recoupe ça côté Swift, `shopifyTagList()`
+côté web puisque `tagList` est une *computed property*, jamais sérialisée), `product_type`, `vendor`,
+et les **metafields** (un appel séparé par produit, `products/{id}/metafields.json` — pas inclus dans
+`products.json` quel que soit `fields=`, donc `fetchAllProducts()` boucle dessus séquentiellement
+après la pagination principale ; volontairement pas concurrent, pour rester sous le rate-limit REST
+de Shopify sans logique de retry/backoff).
+
+Dans Réglages → Shopify, le bouton **"Dupliquer un produit"** ouvre un formulaire pré-rempli depuis
+un produit déjà synchronisé (description, vendor, type, tags, prix, métadonnées) — **tout est
+éditable avant l'envoi**, y compris retirer une métadonnée qui ne s'applique pas au nouveau produit.
+Le pré-remplissage se fait entièrement côté client (les données sont déjà dans `state.shopifyProducts`
+depuis la synchro) ; à la soumission, c'est exactement ce qui est affiché à l'écran qui part vers
+`POST /api/shopify/products` — le serveur ne va rechercher aucun "produit modèle" de son côté, il crée
+tel quel ce qu'on lui envoie. Cas d'usage : décliner "Casque Power Ranger Rouge" en "…Bleu" en
+gardant tout sauf le titre et la description propre à la couleur. Toujours créé en **brouillon**
+(jamais publié automatiquement) — à relire et publier depuis l'admin Shopify. Ça nécessite le scope
+**`write_products`** sur l'app personnalisée Shopify (le client n'avait besoin que de `read_products`
+jusqu'ici) : Shopify Admin → Paramètres → Apps → développer l'app → Configuration → cocher
+`write_products` → Enregistrer.
 
 ### Variables d'environnement
 

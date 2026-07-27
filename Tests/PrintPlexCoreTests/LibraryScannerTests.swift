@@ -62,6 +62,53 @@ final class LibraryScannerTests: XCTestCase {
         XCTAssertEqual(orphans, ["orphelin"])
     }
 
+    func testIgnoresNASHousekeepingFolders() async throws {
+        try write("Figurines/Dragon/dragon.stl")
+        // Synology (and similar NAS) create these throughout the tree, at every
+        // level, on every network share — never real user content.
+        try write("Figurines/Dragon/@eaDir/SYNOINDEX_THUMB.jpg")
+        try write("Figurines/@SynoResource/somefile.dat")
+        try write("Figurines/#recycle/deleted.stl")
+        try write("@eaDir/root_level_thumb.jpg")
+        try write("orphelin.stl")
+
+        let events = await collectEvents()
+
+        let allFileNames = events.compactMap { event -> String? in
+            switch event {
+            case .fileScanned(let f, _, _, _): return f.fileName
+            case .unsortedFileScanned(let f, _, _): return f.fileName
+            default: return nil
+            }
+        }
+        XCTAssertFalse(allFileNames.contains("SYNOINDEX_THUMB"))
+        XCTAssertFalse(allFileNames.contains("somefile"))
+        XCTAssertFalse(allFileNames.contains("deleted"))
+        XCTAssertFalse(allFileNames.contains("root_level_thumb"))
+        XCTAssertTrue(allFileNames.contains("dragon"))
+        XCTAssertTrue(allFileNames.contains("orphelin"))
+    }
+
+    func testIgnoresSynoEAStreamSidecarFiles() async throws {
+        try write("Figurines/Dragon/dragon.stl")
+        try write("Figurines/Dragon/rendu.png")
+        // Synology stores a file's extended attributes (Finder metadata, resource
+        // forks…) as a *separate* sidecar file when served over NFS/SMB, since
+        // those protocols can't carry them inline — never real content, and
+        // named after the original file rather than being its own clean name,
+        // so it can't be matched as an exact ignored folder name.
+        try write("Figurines/Dragon/dragon.stl@SynoEAStream")
+        try write("Figurines/Dragon/rendu.png@SYNOEASTREAM") // casing shouldn't matter
+
+        let events = await collectEvents()
+
+        let scannedFileCount = events.reduce(0) { count, event in
+            if case .fileScanned = event { return count + 1 }
+            return count
+        }
+        XCTAssertEqual(scannedFileCount, 2, "only dragon.stl and rendu.png, not their @SynoEAStream sidecars")
+    }
+
     func testSkipsDateGroupingFolders() async throws {
         try write("Posters/2026-04/MonProjet/piece.3mf")
 

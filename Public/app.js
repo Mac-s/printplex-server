@@ -2043,6 +2043,7 @@ function renderShopifyTabHtml(overview) {
       </form>
       <button class="btn btn-primary btn-sm" id="btnSaveShopify">Enregistrer</button>
       <button class="btn btn-sm" id="btnSyncShopify" ${overview.shopifyConfigured ? "" : "disabled"}>🔄 Synchroniser</button>
+      <button class="btn btn-sm" id="btnDuplicateProduct" ${overview.shopifyConfigured ? "" : "disabled"}>🧬 Dupliquer un produit</button>
       <div class="setting-row" style="border:none">
         <span class="hint">
           ${overview.shopifyProductCount > 0 ? `${overview.shopifyProductCount} produits` : "Aucune synchronisation"}
@@ -2051,7 +2052,7 @@ function renderShopifyTabHtml(overview) {
       </div>
       ${overview.shopifySyncError ? `<div class="message err">${escapeHtml(overview.shopifySyncError)}</div>` : ""}
       <div id="shopifySettingsMessage"></div>
-      <p class="hint" style="margin-top:12px">Shopify Admin → Paramètres → Apps → Développer des apps. Accordez la permission read_products.</p>
+      <p class="hint" style="margin-top:12px">Shopify Admin → Paramètres → Apps → Développer des apps. Accordez les permissions read_products (lecture du catalogue) et write_products (nécessaire pour "Dupliquer un produit").</p>
     </div>
   `;
 }
@@ -2087,6 +2088,131 @@ function wireShopifyTab(overview) {
       openSettings("shopify");
     } catch (e) {
       msg.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`;
+    }
+  });
+
+  document.getElementById("btnDuplicateProduct").addEventListener("click", () => openDuplicateProductModal());
+}
+
+// Shopify's REST API returns tags as one comma-separated string, not an array
+// (mirrors ShopifyProduct.tagList on the Swift side — that's a computed
+// property there and never serialized, so it has to be redone here).
+function shopifyTagList(product) {
+  return (product.tags || "").split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+/// "Dupliquer un produit" — creates a new Shopify product (as a draft) copying
+/// description/vendor/type/tags/metafields/price from an existing one, so
+/// producing e.g. "Casque Power Ranger Bleu" from "…Rouge" only needs a new
+/// title instead of retyping everything.
+/// Everything here is pre-filled from the chosen template purely client-side
+/// (the data's already in state.shopifyProducts) and fully editable before
+/// submit — e.g. a color-specific detail in the description needs changing
+/// for the second helmet, not just its title. Whatever's on screen at submit
+/// time is exactly what's sent; the server does no template lookup of its own.
+function openDuplicateProductModal() {
+  let metafields = []; // [{namespace, key, value, type}], edited in place below
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal">
+      <h2>Dupliquer un produit Shopify</h2>
+      <div class="field" style="margin-bottom:10px">
+        <label>Produit modèle (pré-remplit les champs ci-dessous, éditables ensuite)</label>
+        <select id="dupTemplateSelect">
+          <option value="">Aucun (partir de zéro)</option>
+          ${state.shopifyProducts.map((p) => `<option value="${p.id}">${escapeHtml(p.title)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="form-grid">
+        <div class="field" style="grid-column:1/-1"><label>Titre</label><input id="dupTitleInput" placeholder="ex. Casque Power Ranger Bleu" /></div>
+        <div class="field" style="grid-column:1/-1"><label>Description (HTML)</label><textarea id="dupBodyInput" rows="4"></textarea></div>
+        <div class="field"><label>Type de produit</label><input id="dupTypeInput" /></div>
+        <div class="field"><label>Marque</label><input id="dupVendorInput" /></div>
+        <div class="field"><label>Tags (séparés par virgules)</label><input id="dupTagsInput" /></div>
+        <div class="field"><label>Prix (€)</label><input id="dupPriceInput" type="number" step="0.01" min="0" /></div>
+      </div>
+      <div class="chip-editor">
+        <label>Métadonnées</label>
+        <div id="dupMetafieldsList"></div>
+      </div>
+      <p class="hint" style="margin-top:10px">Créé comme brouillon sur Shopify — à relire et publier depuis l'admin Shopify une fois prêt.</p>
+      <div id="dupModalMessage"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-sm" id="btnCancelDup">Annuler</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btnConfirmDup">Créer (brouillon)</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const templateSelect = overlay.querySelector("#dupTemplateSelect");
+  const titleInput = overlay.querySelector("#dupTitleInput");
+  const bodyInput = overlay.querySelector("#dupBodyInput");
+  const typeInput = overlay.querySelector("#dupTypeInput");
+  const vendorInput = overlay.querySelector("#dupVendorInput");
+  const tagsInput = overlay.querySelector("#dupTagsInput");
+  const priceInput = overlay.querySelector("#dupPriceInput");
+  const metafieldsList = overlay.querySelector("#dupMetafieldsList");
+
+  function renderMetafields() {
+    metafieldsList.innerHTML = metafields.length
+      ? metafields.map((m, i) => `
+          <div class="dup-metafield-row" data-index="${i}">
+            <span class="dup-metafield-key" title="${escapeHtml(m.namespace)}.${escapeHtml(m.key)}">${escapeHtml(m.key)}</span>
+            <input class="dup-metafield-value" data-index="${i}" value="${escapeHtml(m.value)}" />
+            <button type="button" class="icon-btn dup-metafield-remove" data-index="${i}" title="Retirer">✕</button>
+          </div>`).join("")
+      : `<div class="empty">Aucune métadonnée.</div>`;
+    metafieldsList.querySelectorAll(".dup-metafield-value").forEach((inp) => {
+      inp.addEventListener("input", () => { metafields[Number(inp.dataset.index)].value = inp.value; });
+    });
+    metafieldsList.querySelectorAll(".dup-metafield-remove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        metafields.splice(Number(btn.dataset.index), 1);
+        renderMetafields();
+      });
+    });
+  }
+  renderMetafields();
+
+  templateSelect.addEventListener("change", () => {
+    const product = state.shopifyProducts.find((p) => String(p.id) === templateSelect.value);
+    titleInput.value = product ? product.title : "";
+    bodyInput.value = product?.bodyHtml || "";
+    typeInput.value = product?.productType || "";
+    vendorInput.value = product?.vendor || "";
+    tagsInput.value = product ? shopifyTagList(product).join(", ") : "";
+    priceInput.value = product?.variants?.[0]?.price || "";
+    metafields = product?.metafields ? product.metafields.map((m) => ({ ...m })) : [];
+    renderMetafields();
+  });
+
+  overlay.querySelector("#btnCancelDup").addEventListener("click", () => overlay.remove());
+  overlay.addEventListener("click", (evt) => { if (evt.target === overlay) overlay.remove(); });
+
+  overlay.querySelector("#btnConfirmDup").addEventListener("click", async () => {
+    const title = titleInput.value.trim();
+    const msgBox = overlay.querySelector("#dupModalMessage");
+    if (!title) { msgBox.innerHTML = `<div class="message err">Le titre est obligatoire.</div>`; return; }
+    try {
+      await api("/api/shopify/products", {
+        method: "POST",
+        body: JSON.stringify({
+          title,
+          bodyHtml: bodyInput.value.trim() || null,
+          productType: typeInput.value.trim() || null,
+          vendor: vendorInput.value.trim() || null,
+          tags: tagsInput.value.trim() || null,
+          price: priceInput.value.trim() || null,
+          metafields: metafields.map((m) => ({ namespace: m.namespace, key: m.key, value: m.value, type: m.type })),
+        }),
+      });
+      overlay.remove();
+      await onLibraryChanged();
+      openSettings("shopify");
+    } catch (e) {
+      msgBox.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`;
     }
   });
 }

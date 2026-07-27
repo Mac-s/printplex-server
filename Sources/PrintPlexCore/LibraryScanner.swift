@@ -44,6 +44,23 @@ public final class SelfWriteTracker: @unchecked Sendable {
 /// already-known paths (from its own database) and consumes the event stream.
 public enum LibraryScanner {
 
+    /// NAS housekeeping folders that show up throughout the tree on network
+    /// shares (created at every level, not just the root) — never real user
+    /// content, so never worth surfacing as "unsorted" files. `.skipsHiddenFiles`
+    /// doesn't catch these since none of them start with a dot.
+    static let ignoredFolderNames: Set<String> = [
+        "@eaDir", "@SynoResource", "@sharesnap", ".SynologyWorkingDirectory",
+        "#recycle", "$RECYCLE.BIN", "System Volume Information",
+    ]
+
+    /// Per-file NAS sidecar suffixes — e.g. Synology stores a file's extended
+    /// attributes (Finder metadata, resource forks…) as a *separate* file named
+    /// `originalname@SynoEAStream` next to it when served over NFS/SMB, since
+    /// those protocols can't carry them inline the way AFP/native filesystems
+    /// can. Matched case-insensitively since NFS/SMB clients don't always
+    /// agree on the casing they report.
+    static let ignoredFileSuffixes: [String] = ["@SynoEAStream"]
+
     /// Progressively scans `root` using bottom-up project detection.
     /// Emits events for every file found, flagging each as new, existing, or unchanged.
     /// When `lastScanDate` is provided, files not modified since then are marked as unchanged
@@ -91,7 +108,24 @@ public enum LibraryScanner {
                     return
                 }
 
-                let allURLs = enumerator.compactMap { $0 as? URL }
+                // Manual iteration (rather than the `for`/`compactMap` sugar) so
+                // `skipDescendants()` can prune NAS housekeeping folders entirely
+                // instead of walking into e.g. a large @eaDir thumbnail cache
+                // just to discard every file found inside it afterwards.
+                var allURLs: [URL] = []
+                while let url = enumerator.nextObject() as? URL {
+                    let name = url.lastPathComponent
+                    if Self.ignoredFolderNames.contains(name) {
+                        let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                        if isDir { enumerator.skipDescendants() }
+                        continue
+                    }
+                    let lowerName = name.lowercased()
+                    if Self.ignoredFileSuffixes.contains(where: { lowerName.hasSuffix($0.lowercased()) }) {
+                        continue
+                    }
+                    allURLs.append(url)
+                }
                 var scannedFiles: [String: ScannedFile] = [:]
                 // Track which files were unchanged (skipped full scan)
                 var unchangedPaths: Set<String> = []

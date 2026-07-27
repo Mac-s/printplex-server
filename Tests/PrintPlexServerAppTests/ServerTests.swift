@@ -287,4 +287,21 @@ final class ServerTests: XCTestCase {
             XCTAssertEqual(res.status, .serviceUnavailable)
         }
     }
+
+    func testCreateProductRejectsEmptyTitle() async throws {
+        // Checked before touching Shopify at all, so this doesn't need credentials.
+        try await app.test(.POST, "api/shopify/products", beforeRequest: { req in
+            try req.content.encode(ShopifyCreateProductRequest(title: "   "))
+        }, afterResponse: { res async in
+            XCTAssertEqual(res.status, .badRequest)
+        })
+    }
+
+    func testCreateProductUnconfiguredReturns503() async throws {
+        try await app.test(.POST, "api/shopify/products", beforeRequest: { req in
+            try req.content.encode(ShopifyCreateProductRequest(title: "Casque Power Ranger Bleu"))
+        }, afterResponse: { res async in
+            XCTAssertEqual(res.status, .serviceUnavailable)
+        })
+    }
 }

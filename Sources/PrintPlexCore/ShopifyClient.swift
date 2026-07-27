@@ -11,13 +11,54 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
     public let status: String       // "active" | "draft" | "archived"
     public let handle: String
     public let variants: [ShopifyVariant]
+    public let bodyHtml: String?
+    /// Raw comma-separated string, exactly as Shopify's REST API returns it
+    /// (not an array) — use `tagList` for individual tags.
+    public let tags: String
+    public let productType: String?
+    public let vendor: String?
+    /// Not part of the `products.json` response at any `fields=` setting —
+    /// populated separately via `ShopifyClient.fetchMetafields(productId:)`
+    /// and merged in by `fetchAllProducts()`. Empty until then.
+    public var metafields: [ShopifyMetafield]
 
-    public init(id: Int, title: String, status: String, handle: String, variants: [ShopifyVariant]) {
+    public init(id: Int, title: String, status: String, handle: String, variants: [ShopifyVariant],
+                bodyHtml: String? = nil, tags: String = "", productType: String? = nil,
+                vendor: String? = nil, metafields: [ShopifyMetafield] = []) {
         self.id = id
         self.title = title
         self.status = status
         self.handle = handle
         self.variants = variants
+        self.bodyHtml = bodyHtml
+        self.tags = tags
+        self.productType = productType
+        self.vendor = vendor
+        self.metafields = metafields
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, status, handle, variants, tags, vendor, metafields
+        case bodyHtml = "body_html"
+        case productType = "product_type"
+    }
+
+    // Custom decode: `metafields` is never present when decoding a
+    // `products.json` response (it's fetched separately), and the other new
+    // fields are defensively optional in case a future `fields=` tweak omits
+    // one — same decodeIfPresent pattern as PrinterProfile in PrintEstimator.swift.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        status = try c.decode(String.self, forKey: .status)
+        handle = try c.decode(String.self, forKey: .handle)
+        variants = try c.decodeIfPresent([ShopifyVariant].self, forKey: .variants) ?? []
+        bodyHtml = try c.decodeIfPresent(String.self, forKey: .bodyHtml)
+        tags = try c.decodeIfPresent(String.self, forKey: .tags) ?? ""
+        productType = try c.decodeIfPresent(String.self, forKey: .productType)
+        vendor = try c.decodeIfPresent(String.self, forKey: .vendor)
+        metafields = try c.decodeIfPresent([ShopifyMetafield].self, forKey: .metafields) ?? []
     }
 
     public var isActive: Bool { status == "active" }
@@ -34,6 +75,11 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
         default:         return status
         }
     }
+
+    /// Individual tags, trimmed — see `tags` for why this isn't just `[String]`.
+    public var tagList: [String] {
+        tags.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
 }
 
 public struct ShopifyVariant: Codable, Sendable {
@@ -48,9 +94,75 @@ public struct ShopifyVariant: Codable, Sendable {
     }
 }
 
+/// A Shopify metafield (custom key/value data attached to a product — e.g. a
+/// "matériau" or "temps d'impression" field set up in the Shopify admin).
+/// `namespace`/`key` together identify it; `type` is Shopify's metafield type
+/// (`single_line_text_field`, `number_integer`, `json`…) and is passed through
+/// as-is rather than parsed, since it's only used for round-tripping so far.
+public struct ShopifyMetafield: Codable, Sendable, Identifiable, Equatable {
+    public let id: Int
+    public let namespace: String
+    public let key: String
+    public let value: String
+    public let type: String
+
+    public init(id: Int, namespace: String, key: String, value: String, type: String) {
+        self.id = id
+        self.namespace = namespace
+        self.key = key
+        self.value = value
+        self.type = type
+    }
+}
+
+/// A metafield to set when creating a product (see `ShopifyClient.createProduct`)
+/// — same shape as `ShopifyMetafield` minus the server-assigned `id`.
+public struct ShopifyMetafieldInput: Codable, Sendable, Equatable {
+    public var namespace: String
+    public var key: String
+    public var value: String
+    public var type: String
+
+    public init(namespace: String, key: String, value: String, type: String) {
+        self.namespace = namespace
+        self.key = key
+        self.value = value
+        self.type = type
+    }
+}
+
 private struct ShopifyProductsResponse: Codable {
     let products: [ShopifyProduct]
 }
+
+private struct ShopifyMetafieldsResponse: Codable {
+    let metafields: [ShopifyMetafield]
+}
+
+// MARK: - Product creation (duplicate-as-template)
+
+private struct ShopifyProductCreateRequest: Codable {
+    struct Variant: Codable { let price: String }
+    struct Metafield: Codable { let namespace: String; let key: String; let value: String; let type: String }
+
+    var title: String
+    var status = "draft"
+    var bodyHtml: String?
+    var vendor: String?
+    var productType: String?
+    var tags: String?
+    var variants: [Variant]?
+    var metafields: [Metafield]?
+
+    enum CodingKeys: String, CodingKey {
+        case title, status, tags, vendor, variants, metafields
+        case bodyHtml = "body_html"
+        case productType = "product_type"
+    }
+}
+
+private struct ShopifyProductCreateWrapper: Codable { let product: ShopifyProductCreateRequest }
+private struct ShopifyProductCreateResponse: Codable { let product: ShopifyProduct }
 
 // MARK: - Credentials
 
@@ -95,7 +207,14 @@ public struct ShopifyClient: Sendable {
 
     // MARK: - Sync
 
-    /// Fetches all products from Shopify, handling cursor-based pagination.
+    /// Fetches all products from Shopify, handling cursor-based pagination, and
+    /// attaches each product's metafields (a separate call per product — see
+    /// `fetchMetafields`). Sequential, not concurrent: Shopify's REST rate limit
+    /// is a 40-request leaky bucket refilling at 2 req/s, and this client has no
+    /// 429 retry/backoff logic, so network round-trip latency alone keeps a
+    /// sequential loop comfortably under that for realistic catalog sizes.
+    /// A single product's metafields failing to fetch doesn't fail the whole
+    /// sync — it's just left empty for that product.
     public func fetchAllProducts() async throws -> [ShopifyProduct] {
         guard credentials.isConfigured else { throw ShopifyError.notConfigured }
 
@@ -108,7 +227,81 @@ public struct ShopifyClient: Sendable {
             cursor = next
         } while cursor != nil
 
-        return all
+        var withMetafields: [ShopifyProduct] = []
+        withMetafields.reserveCapacity(all.count)
+        for var product in all {
+            product.metafields = (try? await fetchMetafields(productId: product.id)) ?? []
+            withMetafields.append(product)
+        }
+        return withMetafields
+    }
+
+    /// Metafields aren't returned by `products.json` at any `fields=` setting —
+    /// Shopify only exposes them via this dedicated per-product endpoint.
+    public func fetchMetafields(productId: Int) async throws -> [ShopifyMetafield] {
+        guard credentials.isConfigured else { throw ShopifyError.notConfigured }
+
+        let url = URL(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/products/\(productId)/metafields.json")!
+        var request = URLRequest(url: url)
+        request.setValue(credentials.accessToken, forHTTPHeaderField: "X-Shopify-Access-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 30
+
+        let (data, response) = try await URLSession.shared.portableData(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
+        guard http.statusCode == 200 else { throw ShopifyError.httpError(http.statusCode) }
+
+        return try JSONDecoder().decode(ShopifyMetafieldsResponse.self, from: data).metafields
+    }
+
+    /// Creates a new Shopify product from explicit field values — the caller
+    /// (the web dashboard's "Dupliquer un produit" form) is responsible for
+    /// pre-filling those from an existing product if it wants a duplicate;
+    /// this function itself doesn't look anything up, so whatever's passed in
+    /// is exactly what gets sent, edits included. Always created as a
+    /// **draft** so a half-finished duplicate never goes live by accident —
+    /// review and publish it from Shopify's own admin once it looks right.
+    /// Requires the `write_products` Admin API scope (this client only needed
+    /// `read_products` before now).
+    public func createProduct(
+        title: String,
+        bodyHtml: String? = nil,
+        vendor: String? = nil,
+        productType: String? = nil,
+        tags: String? = nil,
+        price: String? = nil,
+        metafields: [ShopifyMetafieldInput] = []
+    ) async throws -> ShopifyProduct {
+        guard credentials.isConfigured else { throw ShopifyError.notConfigured }
+
+        var payload = ShopifyProductCreateRequest(title: title)
+        payload.bodyHtml = bodyHtml
+        payload.vendor = vendor
+        payload.productType = productType
+        payload.tags = (tags?.isEmpty ?? true) ? nil : tags
+        if let price, !price.isEmpty {
+            payload.variants = [.init(price: price)]
+        }
+        if !metafields.isEmpty {
+            payload.metafields = metafields.map {
+                .init(namespace: $0.namespace, key: $0.key, value: $0.value, type: $0.type)
+            }
+        }
+
+        let url = URL(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/products.json")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(credentials.accessToken, forHTTPHeaderField: "X-Shopify-Access-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(ShopifyProductCreateWrapper(product: payload))
+        request.timeoutInterval = 30
+
+        let (data, response) = try await URLSession.shared.portableData(for: request)
+        guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
+        guard http.statusCode == 200 || http.statusCode == 201 else { throw ShopifyError.httpError(http.statusCode) }
+
+        return try JSONDecoder().decode(ShopifyProductCreateResponse.self, from: data).product
     }
 
     // MARK: - Matching
@@ -142,7 +335,7 @@ public struct ShopifyClient: Sendable {
         var components = URLComponents(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/products.json")!
         var items: [URLQueryItem] = [
             URLQueryItem(name: "limit",  value: "250"),
-            URLQueryItem(name: "fields", value: "id,title,status,handle,variants"),
+            URLQueryItem(name: "fields", value: "id,title,status,handle,variants,body_html,tags,product_type,vendor"),
         ]
         if let pageInfo { items.append(URLQueryItem(name: "page_info", value: pageInfo)) }
         components.queryItems = items

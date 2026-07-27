@@ -56,6 +56,57 @@ final class ShopifyClientTests: XCTestCase {
             in: products, projectName: "Inexistant", explicitProductId: nil))
     }
 
+    func testDecodesExtendedProductFields() throws {
+        let json = """
+        {
+            "id": 42,
+            "title": "Casque Power Ranger Rouge",
+            "status": "active",
+            "handle": "casque-power-ranger-rouge",
+            "body_html": "<p>Casque imprimé en 3D.</p>",
+            "tags": "power-ranger, casque, cosplay",
+            "product_type": "Accessoire cosplay",
+            "vendor": "PrintPlex",
+            "variants": [{"id": 1, "price": "45.00", "title": "Default"}]
+        }
+        """
+        let product = try JSONDecoder().decode(ShopifyProduct.self, from: Data(json.utf8))
+
+        XCTAssertEqual(product.bodyHtml, "<p>Casque imprimé en 3D.</p>")
+        XCTAssertEqual(product.tagList, ["power-ranger", "casque", "cosplay"])
+        XCTAssertEqual(product.productType, "Accessoire cosplay")
+        XCTAssertEqual(product.vendor, "PrintPlex")
+        XCTAssertEqual(product.metafields, []) // never present on products.json responses
+    }
+
+    func testMissingOptionalFieldsDefaultGracefully() throws {
+        // Minimal response (e.g. a narrower `fields=`) shouldn't fail to decode.
+        let json = """
+        {"id": 1, "title": "T", "status": "draft", "handle": "t", "variants": []}
+        """
+        let product = try JSONDecoder().decode(ShopifyProduct.self, from: Data(json.utf8))
+        XCTAssertNil(product.bodyHtml)
+        XCTAssertEqual(product.tagList, [])
+        XCTAssertNil(product.productType)
+        XCTAssertNil(product.vendor)
+    }
+
+    func testDecodesMetafieldsResponse() throws {
+        let json = """
+        {"metafields": [
+            {"id": 1, "namespace": "custom", "key": "materiau", "value": "PLA", "type": "single_line_text_field"},
+            {"id": 2, "namespace": "custom", "key": "temps_impression_h", "value": "6", "type": "number_integer"}
+        ]}
+        """
+        struct Wrapper: Codable { let metafields: [ShopifyMetafield] }
+        let decoded = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.metafields.count, 2)
+        XCTAssertEqual(decoded.metafields[0].key, "materiau")
+        XCTAssertEqual(decoded.metafields[0].value, "PLA")
+        XCTAssertEqual(decoded.metafields[1].type, "number_integer")
+    }
+
     func testLowestPriceAndStatus() {
         let product = ShopifyProduct(
             id: 1, title: "T", status: "active", handle: "t",

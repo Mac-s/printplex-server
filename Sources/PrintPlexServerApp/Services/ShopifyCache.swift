@@ -56,4 +56,19 @@ actor ShopifyCache {
     func url(for product: ShopifyProduct) -> URL? {
         client.productURL(for: product)
     }
+
+    /// Creates a new product on Shopify from explicit field values (the caller
+    /// — the web dashboard's duplicate-product form — already resolved
+    /// whatever it wants copied from a template) and folds it straight into
+    /// the cache, so it shows up immediately without waiting for the next
+    /// full sync.
+    func createProduct(title: String, bodyHtml: String?, vendor: String?, productType: String?,
+                        tags: String?, price: String?, metafields: [ShopifyMetafieldInput]) async throws -> ShopifyProduct {
+        let created = try await client.createProduct(
+            title: title, bodyHtml: bodyHtml, vendor: vendor, productType: productType,
+            tags: tags, price: price, metafields: metafields
+        )
+        products.append(created)
+        return created
+    }
 }
