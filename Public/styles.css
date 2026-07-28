@@ -331,6 +331,21 @@ button, input, select, textarea { font-family: inherit; font-size: 14px; }
 .shopify-badge .dot.on { background: #33cc66; }
 .shopify-badge .dot.off { background: #ffa733; }
 
+.printed-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  background: rgba(20,20,22,.55);
+  backdrop-filter: blur(6px);
+}
+
 .missing-chips {
   position: absolute;
   left: 6px;

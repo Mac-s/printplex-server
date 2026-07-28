@@ -19,7 +19,10 @@ const state = {
   view: "grid",           // "grid" | "project" | "settings"
   filter: { type: "all" },// {type:"all"|"todo"} | {type:"kind"|"shopify", value} | {type:"category"|"tag"|"material"|"creator"}
   selected: { category: new Set(), tag: new Set(), material: new Set(), creator: new Set() },
-  collapsedGroups: new Set(),
+  // "Categories"/"Materiaux"/"Tags"/"Types 3D" tend to accumulate a lot of
+  // entries — collapsed by default so the sidebar opens uncluttered; "creator"
+  // and "printed" stay expanded since they're short.
+  collapsedGroups: new Set(["types", "category", "material", "tag"]),
   searchText: "",
   selectedId: null,       // open project id (view === "project")
   settingsTab: "library",
@@ -311,6 +314,10 @@ function projectsMatchingShopifyStatus(status) {
   return state.projects.filter((p) => shopifyStatusOf(p) === status);
 }
 
+function projectsMatchingPrinted(printed) {
+  return state.projects.filter((p) => Boolean(p.alreadyPrinted) === printed);
+}
+
 /// Inverse of the "none" Shopify filter: products that exist on Shopify but
 /// that no project in the library currently matches (by explicit assignment
 /// or by name), i.e. products still needing a project on this side.
@@ -402,6 +409,16 @@ function renderSidebar() {
   }
   html += `</div>`;
 
+  // Impression — déjà imprimé / non imprimé
+  if (state.projects.length > 0) {
+    const printedCount = projectsMatchingPrinted(true).length;
+    const notPrintedCount = projectsMatchingPrinted(false).length;
+    let body = "";
+    body += filterItemHtml({ icon: "✅", label: "Déjà imprimé", count: printedCount, active: state.filter.type === "printed" && state.filter.value === true, action: "printed", value: "true" });
+    body += filterItemHtml({ icon: "⭕", label: "Non imprimé", count: notPrintedCount, active: state.filter.type === "printed" && state.filter.value === false, action: "printed", value: "false" });
+    html += groupHtml("printed", "Impression", body);
+  }
+
   // Shopify — only once something has actually been synced
   if (state.shopifyProducts.length > 0) {
     const counts = {
@@ -471,6 +488,7 @@ function wireSidebarEvents() {
       case "kind": setSingleFilter("kind", btn.dataset.value); break;
       case "shopify": setSingleFilter("shopify", btn.dataset.value); break;
       case "shopifyOrphans": setSingleFilter("shopifyOrphans"); break;
+      case "printed": setSingleFilter("printed", btn.dataset.value === "true"); break;
       case "multi": toggleMultiFilter(btn.dataset.key, btn.dataset.value); break;
       case "clear": clearMultiFilter(btn.dataset.key); break;
     }
@@ -598,6 +616,10 @@ function renderGrid() {
     case "shopify":
       title = SHOPIFY_STATUS_LABEL[state.filter.value] || "Shopify";
       projectsForGrid = projectsMatchingShopifyStatus(state.filter.value);
+      break;
+    case "printed":
+      title = state.filter.value ? "Déjà imprimé" : "Non imprimé";
+      projectsForGrid = projectsMatchingPrinted(state.filter.value);
       break;
     case "category": case "tag": case "material": case "creator": {
       const key = state.filter.type;
@@ -801,6 +823,7 @@ function projectCardHtml(project, opts = {}) {
           ? `<img src="${coverUrl}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'cover-placeholder',textContent:'🧊'}))" />`
           : `<div class="cover-placeholder">🧊</div>`}
         ${product ? `<div class="shopify-badge"><span class="dot ${product.status === "active" ? "on" : "off"}"></span>${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}</div>` : ""}
+        ${project.alreadyPrinted ? `<div class="printed-badge" title="Déjà imprimé">✅</div>` : ""}
         ${opts.missing ? `<div class="missing-chips">${missingMetadataLabels(project).map((m) => `<span class="missing-chip">${escapeHtml(m)}</span>`).join("")}</div>` : ""}
       </div>
       <div class="card-body">
