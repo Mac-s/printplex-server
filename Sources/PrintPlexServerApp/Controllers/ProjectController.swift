@@ -11,6 +11,7 @@ struct ProjectUpdateRequest: Content {
     var suggestedMaterials: [String]?
     var multiColor: Bool?
     var notes: String?
+    var alreadyPrinted: Bool?
     var shopifyProductId: String?
     var coverImageFileName: String?
 }
@@ -86,6 +87,7 @@ struct ProjectController: RouteCollection {
         if let v = body.suggestedMaterials { model.suggestedMaterials = v }
         if let v = body.multiColor { model.multiColor = v }
         if let v = body.notes { model.notes = v }
+        if let v = body.alreadyPrinted { model.alreadyPrinted = v }
         if let v = body.shopifyProductId { model.shopifyProductId = v }
         if let v = body.coverImageFileName { model.coverImageFileName = v }
         try await model.save(on: req.db)
@@ -99,6 +101,7 @@ struct ProjectController: RouteCollection {
             if let v = body.suggestedMaterials { info.materiaux_suggeres = v }
             if let v = body.multiColor { info.multi_couleur = v }
             if let v = body.notes { info.notes = v }
+            if let v = body.alreadyPrinted { info.deja_imprime = v }
             if let v = body.shopifyProductId { info.shopify_product_id = v }
             if let v = body.coverImageFileName { info.image_principale = v }
         }

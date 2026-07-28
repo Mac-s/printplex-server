@@ -1056,6 +1056,10 @@ function renderProjectDetail(project) {
       </div>
       ${chipEditorHtml("materialsChipList", "Matériaux", "🧵", project.suggestedMaterials || [], "chip-material")}
       ${chipEditorHtml("tagsChipList", "Tags", "🏷️", project.tags || [], "chip-tag")}
+      <label class="already-printed-check">
+        <input type="checkbox" id="detailAlreadyPrintedCheck" ${project.alreadyPrinted ? "checked" : ""} />
+        ✅ Déjà imprimé
+      </label>
     </div>
 
     ${notesSectionHtml(project)}
@@ -1077,6 +1081,7 @@ function wireProjectDetailEvents(project) {
   wireHeaderAutosave(project);
   wireMetadataField("detailCreatorInput", "creator", project, () => state.projects.map((p) => p.creator).filter(Boolean));
   wireMetadataField("detailCategoryInput", "category", project, () => state.projects.map((p) => p.category).filter(Boolean));
+  wireAlreadyPrintedCheck(project);
 
   wireChipEditor("materialsChipList", project.suggestedMaterials || [],
     (list) => updateChipField(project, "suggestedMaterials", list),
@@ -1138,6 +1143,23 @@ function wireMetadataField(inputId, fieldKey, project, allValuesFn) {
     if (!q) return [];
     return [...new Set(allValuesFn())].filter((v) => v.toLowerCase().includes(q) && v.toLowerCase() !== q).slice(0, 8);
   }, (value) => { input.value = value; commitAndSync(value); });
+}
+
+// ── Already-printed checkbox ──
+
+function wireAlreadyPrintedCheck(project) {
+  const check = document.getElementById("detailAlreadyPrintedCheck");
+  check.addEventListener("change", async () => {
+    const value = check.checked;
+    try {
+      await api(`/api/projects/${project.id}`, { method: "PATCH", body: JSON.stringify({ alreadyPrinted: value }) });
+      project.alreadyPrinted = value;
+      updateLocalProject(project.id, { alreadyPrinted: value });
+    } catch (e) {
+      check.checked = !value; // revert the optimistic toggle on failure
+      alert(`Échec de la sauvegarde : ${e.message}`);
+    }
+  });
 }
 
 // ── Materials / tags chip editors ──
@@ -1346,10 +1368,13 @@ function shopifySectionHtml(project) {
         </div>` : `<div class="empty">Non publié sur Shopify.</div>`}
       <div class="field" style="margin-top:10px">
         <label>Assignation manuelle</label>
-        <select id="shopifyManualSelect">
-          <option value="">Auto (par nom)</option>
-          ${state.shopifyProducts.map((p) => `<option value="${p.id}" ${String(p.id) === (project.shopifyProductId || "") ? "selected" : ""}>${escapeHtml(p.title)}</option>`).join("")}
-        </select>
+        <div style="display:flex; gap:8px; align-items:center">
+          <select id="shopifyManualSelect" style="flex:1">
+            <option value="">Auto (par nom)</option>
+            ${state.shopifyProducts.map((p) => `<option value="${p.id}" ${String(p.id) === (project.shopifyProductId || "") ? "selected" : ""}>${escapeHtml(p.title)}</option>`).join("")}
+          </select>
+          <button class="btn btn-sm" id="btnCreateFromExisting">✨ Créer un produit à partir de…</button>
+        </div>
       </div>
       <button class="btn btn-sm" id="btnShopifySync" style="margin-top:8px">🔄 Resynchroniser</button>
       <div id="shopifySectionMessage"></div>
@@ -1378,6 +1403,20 @@ function wireShopifySection(project) {
     } catch (e) {
       msg.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`;
     }
+  });
+
+  // Same "Dupliquer un produit" flow as Réglages → Shopify, just relocated
+  // next to the manual assignment picker — e.g. from "Casque Power Ranger
+  // Noir", pick "…Jaune" as the template and get a prefilled draft. The
+  // difference here: the new product is linked to *this* project automatically,
+  // sparing the extra trip to the manual-assignment select afterwards.
+  document.getElementById("btnCreateFromExisting")?.addEventListener("click", () => {
+    openDuplicateProductModal({
+      contextHint: `Le produit créé sera automatiquement associé à « ${project.name} ».`,
+      onCreated: async (product) => {
+        await api(`/api/projects/${project.id}`, { method: "PATCH", body: JSON.stringify({ shopifyProductId: String(product.id) }) });
+      },
+    });
   });
 }
 
@@ -2110,7 +2149,14 @@ function shopifyTagList(product) {
 /// submit — e.g. a color-specific detail in the description needs changing
 /// for the second helmet, not just its title. Whatever's on screen at submit
 /// time is exactly what's sent; the server does no template lookup of its own.
-function openDuplicateProductModal() {
+///
+/// `opts.onCreated(product)`, if given, runs right after the product is
+/// created (e.g. the project detail's "Créer un produit à partir de…" button
+/// uses it to link the new product to the current project) — the caller
+/// decides what "success" means beyond the Shopify creation itself, this
+/// modal only ever knows how to build the product. `opts.contextHint` is an
+/// optional extra line explaining that side effect to the user.
+function openDuplicateProductModal(opts = {}) {
   let metafields = []; // [{namespace, key, value, type}], edited in place below
 
   const overlay = document.createElement("div");
@@ -2138,6 +2184,7 @@ function openDuplicateProductModal() {
         <div id="dupMetafieldsList"></div>
       </div>
       <p class="hint" style="margin-top:10px">Créé comme brouillon sur Shopify — à relire et publier depuis l'admin Shopify une fois prêt.</p>
+      ${opts.contextHint ? `<p class="hint">${escapeHtml(opts.contextHint)}</p>` : ""}
       <div id="dupModalMessage"></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-sm" id="btnCancelDup">Annuler</button>
@@ -2196,7 +2243,7 @@ function openDuplicateProductModal() {
     const msgBox = overlay.querySelector("#dupModalMessage");
     if (!title) { msgBox.innerHTML = `<div class="message err">Le titre est obligatoire.</div>`; return; }
     try {
-      await api("/api/shopify/products", {
+      const product = await api("/api/shopify/products", {
         method: "POST",
         body: JSON.stringify({
           title,
@@ -2209,8 +2256,12 @@ function openDuplicateProductModal() {
         }),
       });
       overlay.remove();
+      if (opts.onCreated) {
+        try { await opts.onCreated(product); }
+        catch (e) { alert(`Produit créé, mais échec de l'association : ${e.message}`); }
+      }
       await onLibraryChanged();
-      openSettings("shopify");
+      if (!opts.onCreated) openSettings("shopify");
     } catch (e) {
       msgBox.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`;
     }

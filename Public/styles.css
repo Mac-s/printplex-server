@@ -743,6 +743,16 @@ button.entity-row:hover { border-color: var(--accent); }
 .chip-editor:last-child { margin-bottom: 0; }
 .chip-editor > label { font-size: 11px; color: var(--text-muted); display: block; margin-bottom: 5px; }
 
+.already-printed-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+.already-printed-check input { cursor: pointer; }
+
 .dup-metafield-row {
   display: flex;
   align-items: center;

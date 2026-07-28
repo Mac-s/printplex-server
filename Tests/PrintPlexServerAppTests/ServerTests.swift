@@ -129,6 +129,24 @@ final class ServerTests: XCTestCase {
             XCTAssertEqual(file.printParams?.manualWorkLevel, "medium")
         }
 
+        // 4c. "Already printed" is a manual flag, persisted like other metadata
+        // (DB + info.json), and readable from both list and detail endpoints.
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(alreadyPrinted: true))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertEqual(project.alreadyPrinted, true)
+        })
+        try await app.test(.GET, "api/projects") { res async throws in
+            let project = try XCTUnwrap(try res.content.decode([ProjectDTO].self).first)
+            XCTAssertEqual(project.alreadyPrinted, true)
+        }
+        let infoURL = mediaDir.appendingPathComponent("Groupe/Cube/info.json")
+        let infoDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: infoURL)) as? [String: Any]
+        XCTAssertEqual(infoDict?["deja_imprime"] as? Bool, true)
+
         // 5. Project-level estimate aggregates the parts
         try await app.test(.GET, "api/projects/\(id)/estimate?manualWork=easy") { res async throws in
             let estimate = try res.content.decode(PrintEstimate.self)

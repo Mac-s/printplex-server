@@ -153,6 +153,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
     public var suggestedMaterials: [String]
     public var multiColor: Bool?
     public var notes: String?
+    public var alreadyPrinted: Bool?
 
     /// Shopify integration — explicit product ID override (nil = auto-match by name)
     public var shopifyProductId: String?
@@ -172,7 +173,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
                 coverImageFileName: String? = nil, projectDescription: String? = nil,
                 category: String? = nil, creator: String? = nil, tags: [String] = [],
                 suggestedMaterials: [String] = [], multiColor: Bool? = nil,
-                notes: String? = nil, shopifyProductId: String? = nil,
+                notes: String? = nil, alreadyPrinted: Bool? = nil, shopifyProductId: String? = nil,
                 files: [FileDTO]? = nil, coverFileId: UUID? = nil,
                 partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0) {
         self.id = id
@@ -188,6 +189,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
         self.suggestedMaterials = suggestedMaterials
         self.multiColor = multiColor
         self.notes = notes
+        self.alreadyPrinted = alreadyPrinted
         self.coverFileId = coverFileId
         self.partsCount = partsCount
         self.totalFileCount = totalFileCount

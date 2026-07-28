@@ -92,6 +92,7 @@ public struct ProjectInfo: Sendable, Codable {
     public var notes: String?
     public var image_principale: String?
     public var shopify_product_id: String?
+    public var deja_imprime: Bool?
 
     public init(nom: String? = nil,
                 description: String? = nil,
@@ -103,7 +104,8 @@ public struct ProjectInfo: Sendable, Codable {
                 multi_couleur: Bool? = nil,
                 notes: String? = nil,
                 image_principale: String? = nil,
-                shopify_product_id: String? = nil) {
+                shopify_product_id: String? = nil,
+                deja_imprime: Bool? = nil) {
         self.nom = nom
         self.description = description
         self.categorie = categorie
@@ -115,6 +117,7 @@ public struct ProjectInfo: Sendable, Codable {
         self.notes = notes
         self.image_principale = image_principale
         self.shopify_product_id = shopify_product_id
+        self.deja_imprime = deja_imprime
     }
 }
 

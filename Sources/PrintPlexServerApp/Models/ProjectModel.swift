@@ -21,6 +21,7 @@ final class ProjectModel: Model, @unchecked Sendable {
     @OptionalField(key: "multi_color") var multiColor: Bool?
     @OptionalField(key: "notes") var notes: String?
     @OptionalField(key: "shopify_product_id") var shopifyProductId: String?
+    @OptionalField(key: "already_printed") var alreadyPrinted: Bool?
 
     @Children(for: \.$project) var files: [FileModel]
 
@@ -38,6 +39,7 @@ final class ProjectModel: Model, @unchecked Sendable {
         if let n = info.notes { notes = n }
         if let img = info.image_principale { coverImageFileName = img }
         if let sid = info.shopify_product_id { shopifyProductId = sid }
+        if let p = info.deja_imprime { alreadyPrinted = p }
     }
 
     func toDTO(files: [FileDTO]? = nil, coverFileId: UUID? = nil,
@@ -56,6 +58,7 @@ final class ProjectModel: Model, @unchecked Sendable {
             suggestedMaterials: suggestedMaterials,
             multiColor: multiColor,
             notes: notes,
+            alreadyPrinted: alreadyPrinted,
             shopifyProductId: shopifyProductId,
             files: files,
             coverFileId: coverFileId,

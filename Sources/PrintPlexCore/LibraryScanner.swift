@@ -366,6 +366,7 @@ public enum LibraryScanner {
             "notes": info.notes,
             "image_principale": info.image_principale,
             "shopify_product_id": info.shopify_product_id,
+            "deja_imprime": info.deja_imprime,
         ]
         for (key, value) in knownFields {
             dict[key] = value ?? NSNull()
