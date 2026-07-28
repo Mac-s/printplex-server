@@ -486,3 +486,158 @@ public enum ThreeMFParser {
             ?? index.values.first { norm($0.filename).hasSuffix("3dmodel.model") }
     }
 }
+
+// MARK: - Geometry extraction (for on-screen previews, not estimation)
+
+/// Raw triangle geometry for rendering — unlike `Result`, which only keeps
+/// aggregate stats and discards the mesh, this keeps every vertex.
+public struct RenderableGeometry: Sendable {
+    /// Flat triangle positions: 3 floats per vertex, 3 vertices per triangle
+    /// (no shared-vertex indexing — simplest to hand straight to a GPU).
+    public let positions: [Float]
+    /// Per-vertex face normals (flat shading), same layout/count as `positions`.
+    public let normals: [Float]
+
+    public init(positions: [Float], normals: [Float]) {
+        self.positions = positions
+        self.normals = normals
+    }
+}
+
+extension ThreeMFParser {
+    /// Extracts renderable geometry for plate 0 (or the whole model, for a
+    /// standard 3MF file) — the same plate `parse(_:)` reports stats for,
+    /// since a preview only ever shows one plate at a time anyway. Duplicates
+    /// a little of `parseAllPlates`'s plate-resolution logic rather than
+    /// threading a "collect geometry too" flag through the stats path, to
+    /// keep the two concerns (estimation vs. preview) independent.
+    public static func parseGeometryForPreview(_ url: URL) throws -> RenderableGeometry {
+        let zipData = try Data(contentsOf: url)
+        return try parseGeometryForPreview(data: zipData)
+    }
+
+    /// Same as `parseGeometryForPreview(_:)` but from in-memory data.
+    public static func parseGeometryForPreview(data zipData: Data) throws -> RenderableGeometry {
+        let zip = ZipReader(data: zipData)
+        guard let eocd = zip.findEOCD() else { throw Failure.badZip }
+
+        var index: [String: ZipReader.CDEntry] = [:]
+        var off = eocd.cdOffset
+        for _ in 0..<eocd.entries {
+            guard let e = zip.cdEntry(at: off) else { break }
+            index[norm(e.filename)] = e
+            off += e.totalSize
+        }
+
+        var filesToParse: [(path: String, count: Int)] = []
+
+        if let cfgEntry = index["metadata/model_settings.config"],
+           let cfgData = try? zip.extract(cfgEntry) {
+            let plateDel = PlateConfigDelegate()
+            let plateP = XMLParser(data: cfgData)
+            plateP.delegate = plateDel
+            plateP.parse()
+
+            if plateDel.plateCount > 1, let plate0Objects = plateDel.objectsByPlate[0], !plate0Objects.isEmpty,
+               let mainEntry = findMainModelEntry(in: index),
+               let mainData = try? zip.extract(mainEntry) {
+                let sceneDel = SceneDelegate()
+                let sceneP = XMLParser(data: mainData)
+                sceneP.delegate = sceneDel
+                sceneP.parse()
+
+                for (objId, instanceCount) in plate0Objects {
+                    for path in sceneDel.componentsByObjectId[objId] ?? [] {
+                        filesToParse.append((norm(path), instanceCount))
+                    }
+                }
+            }
+        }
+
+        if filesToParse.isEmpty {
+            filesToParse = index.keys.filter { $0.hasSuffix(".model") }.map { ($0, 1) }
+        }
+        guard !filesToParse.isEmpty else { throw Failure.noModelFile }
+
+        var positions: [Float] = []
+        var normals: [Float] = []
+
+        for (path, count) in filesToParse {
+            guard let entry = index[path], let xmlData = try? zip.extract(entry) else { continue }
+            let d = GeometryDelegate()
+            let p = XMLParser(data: xmlData); p.delegate = d; _ = p.parse()
+            guard !d.positions.isEmpty else { continue }
+            for _ in 0..<count {
+                positions.append(contentsOf: d.positions)
+                normals.append(contentsOf: d.normals)
+            }
+        }
+        guard !positions.isEmpty else { throw Failure.emptyMesh }
+        return RenderableGeometry(positions: positions, normals: normals)
+    }
+}
+
+/// SAX delegate collecting flat triangle position/normal arrays, mirroring
+/// `MeshDelegate`'s traversal (same object/mesh/vertex/triangle handling,
+/// same per-mesh vertex-index reset) but keeping the geometry instead of
+/// reducing it to running stats.
+private final class GeometryDelegate: NSObject, XMLParserDelegate {
+    var positions: [Float] = []
+    var normals: [Float] = []
+
+    private var vertices: [Vec3] = []
+    private var meshVertexStart = 0
+    private var inModelObject = true
+    private var inV = false
+    private var inT = false
+
+    func parser(_ parser: XMLParser, didStartElement el: String,
+                namespaceURI: String?, qualifiedName: String?,
+                attributes a: [String: String]) {
+        switch el {
+        case "object":
+            inModelObject = (a["type"] ?? "model").lowercased() == "model"
+            inV = false; inT = false
+        case "mesh" where inModelObject:
+            meshVertexStart = vertices.count
+            inV = false; inT = false
+        case "vertices" where inModelObject: inV = true
+        case "triangles" where inModelObject: inT = true
+        case "vertex" where inV:
+            guard let x = Double(a["x"] ?? ""),
+                  let y = Double(a["y"] ?? ""),
+                  let z = Double(a["z"] ?? "") else { return }
+            vertices.append(Vec3(x: x, y: y, z: z))
+        case "triangle" where inT:
+            guard let r1 = Int(a["v1"] ?? ""),
+                  let r2 = Int(a["v2"] ?? ""),
+                  let r3 = Int(a["v3"] ?? "") else { return }
+            let i1 = meshVertexStart + r1
+            let i2 = meshVertexStart + r2
+            let i3 = meshVertexStart + r3
+            guard i1 < vertices.count, i2 < vertices.count, i3 < vertices.count else { return }
+            let v1 = vertices[i1], v2 = vertices[i2], v3 = vertices[i3]
+            let u = v2 - v1, v = v3 - v1
+            var nx = u.y * v.z - u.z * v.y
+            var ny = u.z * v.x - u.x * v.z
+            var nz = u.x * v.y - u.y * v.x
+            let len = (nx * nx + ny * ny + nz * nz).squareRoot()
+            if len > 0 { nx /= len; ny /= len; nz /= len }
+            for vertex in [v1, v2, v3] {
+                positions.append(Float(vertex.x)); positions.append(Float(vertex.y)); positions.append(Float(vertex.z))
+                normals.append(Float(nx)); normals.append(Float(ny)); normals.append(Float(nz))
+            }
+        default: break
+        }
+    }
+
+    func parser(_ parser: XMLParser, didEndElement el: String,
+                namespaceURI: String?, qualifiedName: String?) {
+        switch el {
+        case "object":    inModelObject = true; inV = false; inT = false
+        case "vertices":  inV = false
+        case "triangles": inT = false
+        default: break
+        }
+    }
+}

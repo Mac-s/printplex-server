@@ -242,6 +242,25 @@ final class ThreeMFParserTests: XCTestCase {
         XCTAssertEqual(result.plateCount, 1)
     }
 
+    func testParseGeometryForPreviewExtractsTriangles() throws {
+        let url = try writeCube3MF()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let geometry = try ThreeMFParser.parseGeometryForPreview(url)
+
+        // 12 triangles × 3 vertices × 3 floats (x/y/z), same for normals.
+        XCTAssertEqual(geometry.positions.count, 12 * 3 * 3)
+        XCTAssertEqual(geometry.normals.count, geometry.positions.count)
+
+        // Every normal must be unit length — a cheap sanity check that these
+        // are real face normals, not leftover zeros from a degenerate triangle.
+        for i in stride(from: 0, to: geometry.normals.count, by: 3) {
+            let nx = geometry.normals[i], ny = geometry.normals[i + 1], nz = geometry.normals[i + 2]
+            let length = (nx * nx + ny * ny + nz * nz).squareRoot()
+            XCTAssertEqual(length, 1.0, accuracy: 0.01)
+        }
+    }
+
     func testExtractsEmbeddedThumbnail() {
         let png = Data("fake png bytes".utf8)
         let zip = makeStoredZip(entries: [

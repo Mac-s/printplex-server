@@ -3,7 +3,10 @@ import PackageDescription
 
 let package = Package(
     name: "PrintPlexServer",
-    platforms: [.macOS(.v14)],
+    // iOS added so client apps (PrintPlexClient) can depend on PrintPlexCore
+    // directly and share its DTOs instead of redefining them — the server
+    // executable itself still only ever runs on macOS/Linux.
+    platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
         .library(name: "PrintPlexCore", targets: ["PrintPlexCore"]),
         .executable(name: "PrintPlexServerApp", targets: ["PrintPlexServerApp"]),
