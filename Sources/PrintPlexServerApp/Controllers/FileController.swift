@@ -95,7 +95,7 @@ struct FileController: RouteCollection {
     @Sendable
     func download(req: Request) async throws -> Response {
         let file = try await find(req)
-        let path = try safePath(for: file, in: req.application.appConfig)
+        let path = try MediaPath.safePath(for: file, in: req.application.appConfig)
         guard FileManager.default.fileExists(atPath: path) else {
             throw Abort(.notFound, reason: "Fichier absent du disque")
         }
@@ -120,13 +120,13 @@ struct FileController: RouteCollection {
         }
 
         if file.fileRole == .renderImage {
-            let path = try safePath(for: file, in: config)
+            let path = try MediaPath.safePath(for: file, in: config)
             guard FileManager.default.fileExists(atPath: path) else { throw Abort(.notFound) }
             return req.fileio.streamFile(at: path)
         }
 
         if file.kind == .threeMF {
-            let path = try safePath(for: file, in: config)
+            let path = try MediaPath.safePath(for: file, in: config)
             let data = await Task.detached(priority: .utility) {
                 ThreeMFParser.extractThumbnail(at: URL(fileURLWithPath: path))
             }.value
@@ -166,15 +166,5 @@ struct FileController: RouteCollection {
             throw Abort(.notFound, reason: "Fichier introuvable")
         }
         return model
-    }
-
-    /// Defense in depth: never serve anything outside the mounted media root
-    /// (every configured library lives under it, by construction).
-    private func safePath(for file: FileModel, in config: AppConfig) throws -> String {
-        let standardized = URL(fileURLWithPath: file.path).standardizedFileURL.path
-        guard standardized == config.mediaPath || standardized.hasPrefix(config.mediaPath + "/") else {
-            throw Abort(.forbidden, reason: "Chemin hors du répertoire média")
-        }
-        return standardized
     }
 }

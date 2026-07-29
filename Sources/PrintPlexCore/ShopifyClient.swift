@@ -21,10 +21,12 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
     /// populated separately via `ShopifyClient.fetchMetafields(productId:)`
     /// and merged in by `fetchAllProducts()`. Empty until then.
     public var metafields: [ShopifyMetafield]
+    public let images: [ShopifyImage]
 
     public init(id: Int, title: String, status: String, handle: String, variants: [ShopifyVariant],
                 bodyHtml: String? = nil, tags: String = "", productType: String? = nil,
-                vendor: String? = nil, metafields: [ShopifyMetafield] = []) {
+                vendor: String? = nil, metafields: [ShopifyMetafield] = [],
+                images: [ShopifyImage] = []) {
         self.id = id
         self.title = title
         self.status = status
@@ -35,10 +37,11 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
         self.productType = productType
         self.vendor = vendor
         self.metafields = metafields
+        self.images = images
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, title, status, handle, variants, tags, vendor, metafields
+        case id, title, status, handle, variants, tags, vendor, metafields, images
         case bodyHtml = "body_html"
         case productType = "product_type"
     }
@@ -59,6 +62,7 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
         productType = try c.decodeIfPresent(String.self, forKey: .productType)
         vendor = try c.decodeIfPresent(String.self, forKey: .vendor)
         metafields = try c.decodeIfPresent([ShopifyMetafield].self, forKey: .metafields) ?? []
+        images = try c.decodeIfPresent([ShopifyImage].self, forKey: .images) ?? []
     }
 
     public var isActive: Bool { status == "active" }
@@ -86,11 +90,74 @@ public struct ShopifyVariant: Codable, Sendable {
     public let id: Int
     public let price: String
     public let title: String
+    public let sku: String?
+    public let option1: String?
+    public let option2: String?
+    public let option3: String?
+    public let compareAtPrice: String?
 
-    public init(id: Int, price: String, title: String) {
+    public init(id: Int, price: String, title: String, sku: String? = nil,
+                option1: String? = nil, option2: String? = nil, option3: String? = nil,
+                compareAtPrice: String? = nil) {
         self.id = id
         self.price = price
         self.title = title
+        self.sku = sku
+        self.option1 = option1
+        self.option2 = option2
+        self.option3 = option3
+        self.compareAtPrice = compareAtPrice
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, price, title, sku, option1, option2, option3
+        case compareAtPrice = "compare_at_price"
+    }
+}
+
+/// A product image, as returned in `products.json`'s `images` array — src is
+/// a plain HTTPS URL Shopify hosts, no auth needed to fetch it.
+public struct ShopifyImage: Codable, Sendable, Identifiable, Equatable {
+    public let id: Int
+    public let src: String
+    public let alt: String?
+
+    public init(id: Int, src: String, alt: String? = nil) {
+        self.id = id
+        self.src = src
+        self.alt = alt
+    }
+}
+
+/// A variant to set when creating a product — mirrors `ShopifyVariant` minus
+/// the server-assigned `id`. Not setting `option1`/`option2`/`option3` (or the
+/// product's own `options` list, which this client doesn't set at all) means
+/// Shopify falls back to a single generic "Title" option using each variant's
+/// `title` as its value — fine for the common case of a handful of named
+/// variants without needing full Size/Color option metadata.
+public struct ShopifyVariantInput: Codable, Sendable, Equatable {
+    public var price: String
+    public var title: String?
+    public var sku: String?
+
+    public init(price: String, title: String? = nil, sku: String? = nil) {
+        self.price = price
+        self.title = title
+        self.sku = sku
+    }
+}
+
+/// An image to attach when creating a product — Shopify accepts a base64
+/// attachment directly in the product-creation payload, no separate upload
+/// step. Used to carry a *project's* photos onto a duplicated product,
+/// instead of the template product's own photos.
+public struct ShopifyImageInput: Codable, Sendable {
+    public var attachment: String
+    public var filename: String?
+
+    public init(attachment: String, filename: String? = nil) {
+        self.attachment = attachment
+        self.filename = filename
     }
 }
 
@@ -142,8 +209,9 @@ private struct ShopifyMetafieldsResponse: Codable {
 // MARK: - Product creation (duplicate-as-template)
 
 private struct ShopifyProductCreateRequest: Codable {
-    struct Variant: Codable { let price: String }
+    struct Variant: Codable { let price: String; let title: String?; let sku: String? }
     struct Metafield: Codable { let namespace: String; let key: String; let value: String; let type: String }
+    struct Image: Codable { let attachment: String; let filename: String? }
 
     var title: String
     var status = "draft"
@@ -153,9 +221,10 @@ private struct ShopifyProductCreateRequest: Codable {
     var tags: String?
     var variants: [Variant]?
     var metafields: [Metafield]?
+    var images: [Image]?
 
     enum CodingKeys: String, CodingKey {
-        case title, status, tags, vendor, variants, metafields
+        case title, status, tags, vendor, variants, metafields, images
         case bodyHtml = "body_html"
         case productType = "product_type"
     }
@@ -269,8 +338,9 @@ public struct ShopifyClient: Sendable {
         vendor: String? = nil,
         productType: String? = nil,
         tags: String? = nil,
-        price: String? = nil,
-        metafields: [ShopifyMetafieldInput] = []
+        variants: [ShopifyVariantInput] = [],
+        metafields: [ShopifyMetafieldInput] = [],
+        images: [ShopifyImageInput] = []
     ) async throws -> ShopifyProduct {
         guard credentials.isConfigured else { throw ShopifyError.notConfigured }
 
@@ -279,13 +349,16 @@ public struct ShopifyClient: Sendable {
         payload.vendor = vendor
         payload.productType = productType
         payload.tags = (tags?.isEmpty ?? true) ? nil : tags
-        if let price, !price.isEmpty {
-            payload.variants = [.init(price: price)]
+        if !variants.isEmpty {
+            payload.variants = variants.map { .init(price: $0.price, title: $0.title, sku: $0.sku) }
         }
         if !metafields.isEmpty {
             payload.metafields = metafields.map {
                 .init(namespace: $0.namespace, key: $0.key, value: $0.value, type: $0.type)
             }
+        }
+        if !images.isEmpty {
+            payload.images = images.map { .init(attachment: $0.attachment, filename: $0.filename) }
         }
 
         let url = URL(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/products.json")!
@@ -335,7 +408,7 @@ public struct ShopifyClient: Sendable {
         var components = URLComponents(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/products.json")!
         var items: [URLQueryItem] = [
             URLQueryItem(name: "limit",  value: "250"),
-            URLQueryItem(name: "fields", value: "id,title,status,handle,variants,body_html,tags,product_type,vendor"),
+            URLQueryItem(name: "fields", value: "id,title,status,handle,variants,body_html,tags,product_type,vendor,images"),
         ]
         if let pageInfo { items.append(URLQueryItem(name: "page_info", value: pageInfo)) }
         components.queryItems = items

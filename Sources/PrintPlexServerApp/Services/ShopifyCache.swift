@@ -63,10 +63,11 @@ actor ShopifyCache {
     /// the cache, so it shows up immediately without waiting for the next
     /// full sync.
     func createProduct(title: String, bodyHtml: String?, vendor: String?, productType: String?,
-                        tags: String?, price: String?, metafields: [ShopifyMetafieldInput]) async throws -> ShopifyProduct {
+                        tags: String?, variants: [ShopifyVariantInput], metafields: [ShopifyMetafieldInput],
+                        images: [ShopifyImageInput]) async throws -> ShopifyProduct {
         let created = try await client.createProduct(
             title: title, bodyHtml: bodyHtml, vendor: vendor, productType: productType,
-            tags: tags, price: price, metafields: metafields
+            tags: tags, variants: variants, metafields: metafields, images: images
         )
         products.append(created)
         return created

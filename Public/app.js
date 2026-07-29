@@ -1401,6 +1401,28 @@ function shopifyLowestPrice(product) {
   return prices.length ? Math.min(...prices) : null;
 }
 
+/// Single price for a one-variant product, "min–max €" range for several.
+function shopifyPriceSummary(product) {
+  const prices = (product.variants || []).map((v) => parseFloat(v.price)).filter((n) => !Number.isNaN(n));
+  if (!prices.length) return "";
+  const min = Math.min(...prices), max = Math.max(...prices);
+  return min === max ? formatEur(min) : `${formatEur(min)}–${formatEur(max)}`;
+}
+
+/// Strips tags via regex rather than the common "temp <div>.innerHTML then
+/// read .textContent" trick — that still creates real elements (e.g. <img
+/// onerror>), so it can execute attacker-controlled markup even though the
+/// div itself is never attached to the document. body_html comes from
+/// Shopify, which the user controls, but there's no reason to trust it more
+/// than any other external data.
+function stripHtml(html) {
+  return (html || "").replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+function shopifyDescriptionSnippet(product, maxLen = 160) {
+  const text = stripHtml(product.bodyHtml);
+  return text.length > maxLen ? `${text.slice(0, maxLen).trim()}…` : text;
+}
+
 function shopifySectionHtml(project) {
   if (!state.shopifyConfigured) {
     return `
@@ -1419,7 +1441,6 @@ function shopifySectionHtml(project) {
       </div>`;
   }
   const product = matchShopifyProduct(project.name, project.shopifyProductId);
-  const price = product ? shopifyLowestPrice(product) : null;
   return `
     <div class="section">
       <div class="section-title">Shopify</div>
@@ -1428,10 +1449,21 @@ function shopifySectionHtml(project) {
           <span class="dot ${product.status === "active" ? "on" : "off"}"></span>
           <div class="shopify-match-body">
             <div class="shopify-match-title">${escapeHtml(product.title)}</div>
-            <div class="shopify-match-meta">${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}${price != null ? ` · ${formatEur(price)}` : ""}</div>
+            <div class="shopify-match-meta">${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}${shopifyPriceSummary(product) ? ` · ${shopifyPriceSummary(product)}` : ""}${product.productType ? ` · ${escapeHtml(product.productType)}` : ""}</div>
           </div>
           <a class="btn btn-sm" href="https://${escapeHtml(state.shopifyStoreDomain)}/products/${escapeHtml(product.handle)}" target="_blank" rel="noopener">Voir</a>
-        </div>` : `<div class="empty">Non publié sur Shopify.</div>`}
+        </div>
+        ${shopifyDescriptionSnippet(product) ? `<p class="shopify-match-desc">${escapeHtml(shopifyDescriptionSnippet(product))}</p>` : ""}
+        ${product.variants.length > 1 ? `
+          <div class="shopify-variant-list">
+            ${product.variants.map((v) => `<span class="shopify-variant-chip">${escapeHtml(v.title)} · ${formatEur(Number(v.price))}${v.sku ? ` · ${escapeHtml(v.sku)}` : ""}</span>`).join("")}
+          </div>` : ""}
+        ${product.images.length ? `
+          <div class="shopify-image-strip">
+            ${product.images.slice(0, 6).map((img) => `<img src="${escapeHtml(img.src)}" alt="${escapeHtml(img.alt || "")}" loading="lazy" />`).join("")}
+            ${product.images.length > 6 ? `<span class="shopify-image-more">+${product.images.length - 6}</span>` : ""}
+          </div>` : ""}
+        ` : `<div class="empty">Non publié sur Shopify.</div>`}
       <div class="field" style="margin-top:10px">
         <label>Assignation manuelle</label>
         <div style="display:flex; gap:8px; align-items:center">
@@ -1477,8 +1509,12 @@ function wireShopifySection(project) {
   // difference here: the new product is linked to *this* project automatically,
   // sparing the extra trip to the manual-assignment select afterwards.
   document.getElementById("btnCreateFromExisting")?.addEventListener("click", () => {
+    const projectImages = (project.files || [])
+      .filter((f) => f.fileRole === "renderImage")
+      .map((f) => ({ id: f.id, url: `/api/files/${f.id}/thumbnail`, filename: `${f.fileName}.${f.fileExtension}` }));
     openDuplicateProductModal({
       contextHint: `Le produit créé sera automatiquement associé à « ${project.name} ».`,
+      projectImages,
       onCreated: async (product) => {
         await api(`/api/projects/${project.id}`, { method: "PATCH", body: JSON.stringify({ shopifyProductId: String(product.id) }) });
       },
@@ -2224,6 +2260,10 @@ function shopifyTagList(product) {
 /// optional extra line explaining that side effect to the user.
 function openDuplicateProductModal(opts = {}) {
   let metafields = []; // [{namespace, key, value, type}], edited in place below
+  let variants = [{ title: "", price: "", sku: "" }]; // at least one row, even from scratch
+  // Which of *this project's own* photos to attach — not the template's.
+  // All checked by default; only rendered when a project context is given.
+  const selectedImageIds = new Set((opts.projectImages || []).map((img) => img.id));
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -2242,13 +2282,22 @@ function openDuplicateProductModal(opts = {}) {
         <div class="field" style="grid-column:1/-1"><label>Description (HTML)</label><textarea id="dupBodyInput" rows="4"></textarea></div>
         <div class="field"><label>Type de produit</label><input id="dupTypeInput" /></div>
         <div class="field"><label>Marque</label><input id="dupVendorInput" /></div>
-        <div class="field"><label>Tags (séparés par virgules)</label><input id="dupTagsInput" /></div>
-        <div class="field"><label>Prix (€)</label><input id="dupPriceInput" type="number" step="0.01" min="0" /></div>
+        <div class="field" style="grid-column:1/-1"><label>Tags (séparés par virgules)</label><input id="dupTagsInput" /></div>
+      </div>
+      <div class="chip-editor">
+        <label>Variantes</label>
+        <div id="dupVariantsList"></div>
+        <button type="button" class="btn btn-sm" id="btnAddVariant" style="margin-top:6px">+ Variante</button>
       </div>
       <div class="chip-editor">
         <label>Métadonnées</label>
         <div id="dupMetafieldsList"></div>
       </div>
+      ${opts.projectImages && opts.projectImages.length ? `
+        <div class="chip-editor">
+          <label>📷 Photos — celles du projet actuel (remplacent celles du produit modèle)</label>
+          <div class="dup-photos-grid" id="dupPhotosGrid"></div>
+        </div>` : ""}
       <p class="hint" style="margin-top:10px">Créé comme brouillon sur Shopify — à relire et publier depuis l'admin Shopify une fois prêt.</p>
       ${opts.contextHint ? `<p class="hint">${escapeHtml(opts.contextHint)}</p>` : ""}
       <div id="dupModalMessage"></div>
@@ -2265,8 +2314,39 @@ function openDuplicateProductModal(opts = {}) {
   const typeInput = overlay.querySelector("#dupTypeInput");
   const vendorInput = overlay.querySelector("#dupVendorInput");
   const tagsInput = overlay.querySelector("#dupTagsInput");
-  const priceInput = overlay.querySelector("#dupPriceInput");
+  const variantsList = overlay.querySelector("#dupVariantsList");
   const metafieldsList = overlay.querySelector("#dupMetafieldsList");
+  const photosGrid = overlay.querySelector("#dupPhotosGrid");
+
+  function renderVariants() {
+    variantsList.innerHTML = variants.map((v, i) => `
+        <div class="dup-variant-row" data-index="${i}">
+          <input class="dup-variant-title" data-index="${i}" placeholder="Nom (optionnel)" value="${escapeHtml(v.title)}" />
+          <input class="dup-variant-price" data-index="${i}" type="number" step="0.01" min="0" placeholder="Prix €" value="${escapeHtml(v.price)}" />
+          <input class="dup-variant-sku" data-index="${i}" placeholder="SKU" value="${escapeHtml(v.sku)}" />
+          ${variants.length > 1 ? `<button type="button" class="icon-btn dup-variant-remove" data-index="${i}" title="Retirer">✕</button>` : ""}
+        </div>`).join("");
+    variantsList.querySelectorAll(".dup-variant-title").forEach((inp) => {
+      inp.addEventListener("input", () => { variants[Number(inp.dataset.index)].title = inp.value; });
+    });
+    variantsList.querySelectorAll(".dup-variant-price").forEach((inp) => {
+      inp.addEventListener("input", () => { variants[Number(inp.dataset.index)].price = inp.value; });
+    });
+    variantsList.querySelectorAll(".dup-variant-sku").forEach((inp) => {
+      inp.addEventListener("input", () => { variants[Number(inp.dataset.index)].sku = inp.value; });
+    });
+    variantsList.querySelectorAll(".dup-variant-remove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        variants.splice(Number(btn.dataset.index), 1);
+        renderVariants();
+      });
+    });
+  }
+  renderVariants();
+  overlay.querySelector("#btnAddVariant").addEventListener("click", () => {
+    variants.push({ title: "", price: "", sku: "" });
+    renderVariants();
+  });
 
   function renderMetafields() {
     metafieldsList.innerHTML = metafields.length
@@ -2289,6 +2369,23 @@ function openDuplicateProductModal(opts = {}) {
   }
   renderMetafields();
 
+  function renderPhotos() {
+    if (!photosGrid) return;
+    photosGrid.innerHTML = opts.projectImages.map((img) => `
+        <label class="dup-photo-item ${selectedImageIds.has(img.id) ? "selected" : ""}">
+          <input type="checkbox" data-image-id="${img.id}" ${selectedImageIds.has(img.id) ? "checked" : ""} />
+          <img src="${img.url}" alt="" />
+        </label>`).join("");
+    photosGrid.querySelectorAll("input[type=checkbox]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        if (cb.checked) selectedImageIds.add(cb.dataset.imageId);
+        else selectedImageIds.delete(cb.dataset.imageId);
+        cb.closest(".dup-photo-item").classList.toggle("selected", cb.checked);
+      });
+    });
+  }
+  renderPhotos();
+
   templateSelect.addEventListener("change", () => {
     const product = state.shopifyProducts.find((p) => String(p.id) === templateSelect.value);
     titleInput.value = product ? product.title : "";
@@ -2296,9 +2393,14 @@ function openDuplicateProductModal(opts = {}) {
     typeInput.value = product?.productType || "";
     vendorInput.value = product?.vendor || "";
     tagsInput.value = product ? shopifyTagList(product).join(", ") : "";
-    priceInput.value = product?.variants?.[0]?.price || "";
+    variants = product?.variants?.length
+      ? product.variants.map((v) => ({ title: v.title || "", price: v.price || "", sku: v.sku || "" }))
+      : [{ title: "", price: "", sku: "" }];
     metafields = product?.metafields ? product.metafields.map((m) => ({ ...m })) : [];
+    renderVariants();
     renderMetafields();
+    // Photos deliberately untouched — the whole point is they keep coming
+    // from the current project, never from the template being picked here.
   });
 
   overlay.querySelector("#btnCancelDup").addEventListener("click", () => overlay.remove());
@@ -2317,8 +2419,11 @@ function openDuplicateProductModal(opts = {}) {
           productType: typeInput.value.trim() || null,
           vendor: vendorInput.value.trim() || null,
           tags: tagsInput.value.trim() || null,
-          price: priceInput.value.trim() || null,
+          variants: variants
+            .filter((v) => v.price.trim() !== "")
+            .map((v) => ({ price: v.price.trim(), title: v.title.trim() || null, sku: v.sku.trim() || null })),
           metafields: metafields.map((m) => ({ namespace: m.namespace, key: m.key, value: m.value, type: m.type })),
+          imageFileIds: opts.projectImages ? [...selectedImageIds] : undefined,
         }),
       });
       overlay.remove();

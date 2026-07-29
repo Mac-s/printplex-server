@@ -67,7 +67,15 @@ final class ShopifyClientTests: XCTestCase {
             "tags": "power-ranger, casque, cosplay",
             "product_type": "Accessoire cosplay",
             "vendor": "PrintPlex",
-            "variants": [{"id": 1, "price": "45.00", "title": "Default"}]
+            "variants": [
+                {"id": 1, "price": "45.00", "title": "Petit", "sku": "CASQUE-RG-P",
+                 "option1": "Petit", "compare_at_price": "55.00"},
+                {"id": 2, "price": "50.00", "title": "Grand", "sku": "CASQUE-RG-G", "option1": "Grand"}
+            ],
+            "images": [
+                {"id": 100, "src": "https://cdn.shopify.com/img/rouge-1.jpg", "alt": "Casque rouge, vue de face"},
+                {"id": 101, "src": "https://cdn.shopify.com/img/rouge-2.jpg"}
+            ]
         }
         """
         let product = try JSONDecoder().decode(ShopifyProduct.self, from: Data(json.utf8))
@@ -77,6 +85,16 @@ final class ShopifyClientTests: XCTestCase {
         XCTAssertEqual(product.productType, "Accessoire cosplay")
         XCTAssertEqual(product.vendor, "PrintPlex")
         XCTAssertEqual(product.metafields, []) // never present on products.json responses
+
+        XCTAssertEqual(product.variants[0].sku, "CASQUE-RG-P")
+        XCTAssertEqual(product.variants[0].option1, "Petit")
+        XCTAssertEqual(product.variants[0].compareAtPrice, "55.00")
+        XCTAssertNil(product.variants[1].compareAtPrice)
+
+        XCTAssertEqual(product.images.count, 2)
+        XCTAssertEqual(product.images[0].src, "https://cdn.shopify.com/img/rouge-1.jpg")
+        XCTAssertEqual(product.images[0].alt, "Casque rouge, vue de face")
+        XCTAssertNil(product.images[1].alt)
     }
 
     func testMissingOptionalFieldsDefaultGracefully() throws {
@@ -89,6 +107,7 @@ final class ShopifyClientTests: XCTestCase {
         XCTAssertEqual(product.tagList, [])
         XCTAssertNil(product.productType)
         XCTAssertNil(product.vendor)
+        XCTAssertEqual(product.images, [])
     }
 
     func testDecodesMetafieldsResponse() throws {
