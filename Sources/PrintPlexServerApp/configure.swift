@@ -50,7 +50,21 @@ func configure(_ app: Application) async throws {
         let credentials = ShopifyCredentials(storeDomain: settingsRow.shopifyStoreDomain ?? "",
                                              accessToken: settingsRow.shopifyAccessToken ?? "")
         if credentials.isConfigured {
-            app.shopifyCache = ShopifyCache(credentials: credentials)
+            let cache = ShopifyCache(credentials: credentials)
+            app.shopifyCache = cache
+            // `lastSyncDate` only ever lives in this actor's memory, so a fresh
+            // process (e.g. `docker compose up --force-recreate`) always starts
+            // with it nil, even though credentials were already saved — without
+            // this, the dashboard shows nothing Shopify-related until someone
+            // manually hits "Synchroniser" in Settings. Kicking a sync here
+            // mirrors the scan-at-boot behavior below and needs to be
+            // non-blocking: a slow/unreachable Shopify API shouldn't delay the
+            // server from serving requests.
+            if app.environment != .testing {
+                Task.detached(priority: .background) {
+                    try? await cache.sync()
+                }
+            }
         }
     }
 
