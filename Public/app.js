@@ -2259,7 +2259,6 @@ function shopifyTagList(product) {
 /// modal only ever knows how to build the product. `opts.contextHint` is an
 /// optional extra line explaining that side effect to the user.
 function openDuplicateProductModal(opts = {}) {
-  let metafields = []; // [{namespace, key, value, type}], edited in place below
   let variants = [{ title: "", price: "", sku: "" }]; // at least one row, even from scratch
   // Which of *this project's own* photos to attach — not the template's.
   // All checked by default; only rendered when a project context is given.
@@ -2299,9 +2298,8 @@ function openDuplicateProductModal(opts = {}) {
         <div id="dupVariantsList"></div>
         <button type="button" class="btn btn-sm" id="btnAddVariant" style="margin-top:6px">+ Variante</button>
       </div>
-      <div class="chip-editor">
-        <label>Métadonnées</label>
-        <div id="dupMetafieldsList"></div>
+      <div class="field">
+        <label><input type="checkbox" id="dupGoogleCustomProductInput" /> Google : Custom product</label>
       </div>
       ${opts.projectImages && opts.projectImages.length ? `
         <div class="chip-editor">
@@ -2326,9 +2324,13 @@ function openDuplicateProductModal(opts = {}) {
   const tagsInput = overlay.querySelector("#dupTagsInput");
   const seoTitleInput = overlay.querySelector("#dupSeoTitleInput");
   const seoDescriptionInput = overlay.querySelector("#dupSeoDescriptionInput");
+  const googleCustomProductInput = overlay.querySelector("#dupGoogleCustomProductInput");
   const variantsList = overlay.querySelector("#dupVariantsList");
-  const metafieldsList = overlay.querySelector("#dupMetafieldsList");
   const photosGrid = overlay.querySelector("#dupPhotosGrid");
+
+  // Always defaults to checked — "Custom product" should be true on every
+  // product this tool creates, not just copied from whatever the template had.
+  googleCustomProductInput.checked = true;
 
   // "Titre de la page" (SEO) is usually just the product title — mirror it
   // live as the title changes, but stop overwriting the moment the user
@@ -2370,27 +2372,6 @@ function openDuplicateProductModal(opts = {}) {
     renderVariants();
   });
 
-  function renderMetafields() {
-    metafieldsList.innerHTML = metafields.length
-      ? metafields.map((m, i) => `
-          <div class="dup-metafield-row" data-index="${i}">
-            <span class="dup-metafield-key" title="${escapeHtml(m.namespace)}.${escapeHtml(m.key)}">${escapeHtml(m.key)}</span>
-            <input class="dup-metafield-value" data-index="${i}" value="${escapeHtml(m.value)}" />
-            <button type="button" class="icon-btn dup-metafield-remove" data-index="${i}" title="Retirer">✕</button>
-          </div>`).join("")
-      : `<div class="empty">Aucune métadonnée.</div>`;
-    metafieldsList.querySelectorAll(".dup-metafield-value").forEach((inp) => {
-      inp.addEventListener("input", () => { metafields[Number(inp.dataset.index)].value = inp.value; });
-    });
-    metafieldsList.querySelectorAll(".dup-metafield-remove").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        metafields.splice(Number(btn.dataset.index), 1);
-        renderMetafields();
-      });
-    });
-  }
-  renderMetafields();
-
   function renderPhotos() {
     if (!photosGrid) return;
     photosGrid.innerHTML = opts.projectImages.map((img) => `
@@ -2424,17 +2405,20 @@ function openDuplicateProductModal(opts = {}) {
     variants = product?.variants?.length
       ? product.variants.map((v) => ({ title: v.title || "", price: v.price || "", sku: v.sku || "" }))
       : [{ title: "", price: "", sku: "" }];
-    // global.title_tag/description_tag are surfaced as their own dedicated
-    // fields above, not duplicated in the generic metadata list.
-    metafields = product?.metafields
-      ? product.metafields
-          .filter((m) => !(m.namespace === "global" && (m.key === "title_tag" || m.key === "description_tag")))
-          .map((m) => ({ ...m }))
-      : [];
     renderVariants();
-    renderMetafields();
-    // Photos deliberately untouched — the whole point is they keep coming
-    // from the current project, never from the template being picked here.
+    // Google "Custom product" and photos deliberately untouched here: the
+    // former always defaults to true regardless of template (see above),
+    // the latter keeps coming from the current project, never the template.
+    //
+    // No generic metadata copy anymore — Shopify's standardized category
+    // metafields (Couleur/Tissu/Sexe cible/Tranche d'âge, namespace
+    // "shopify") are tied to a Category assignment this tool can't set
+    // (Shopify only exposes that via GraphQL), and including them made
+    // Shopify reject the *entire* product creation with a cryptic "Owner
+    // subtype does not match the metafield definition's constraints" — not
+    // just skip those fields. Only the three fields worth the risk (SEO
+    // title/description, Google custom product) get their own dedicated,
+    // safe handling instead.
   });
 
   overlay.querySelector("#btnCancelDup").addEventListener("click", () => overlay.remove());
@@ -2457,9 +2441,12 @@ function openDuplicateProductModal(opts = {}) {
             .filter((v) => v.price.trim() !== "")
             .map((v) => ({ price: v.price.trim(), title: v.title.trim() || null, sku: v.sku.trim() || null })),
           metafields: [
-            ...metafields.map((m) => ({ namespace: m.namespace, key: m.key, value: m.value, type: m.type })),
             ...(seoTitleInput.value.trim() ? [{ namespace: "global", key: "title_tag", value: seoTitleInput.value.trim(), type: "single_line_text_field" }] : []),
             ...(seoDescriptionInput.value.trim() ? [{ namespace: "global", key: "description_tag", value: seoDescriptionInput.value.trim(), type: "multi_line_text_field" }] : []),
+            // Shopify's long-standing "Google Shopping" metafield set (predates
+            // the newer Category system, so — unlike Couleur/Tissu/etc — it
+            // isn't scoped to a Category and is safe to set on any product.
+            { namespace: "google-shopping", key: "custom_product", value: googleCustomProductInput.checked ? "true" : "false", type: "boolean" },
           ],
           imageFileIds: opts.projectImages ? [...selectedImageIds] : undefined,
         }),
