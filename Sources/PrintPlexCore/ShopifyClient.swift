@@ -207,6 +207,35 @@ public struct ShopifyMetafield: Codable, Sendable, Identifiable, Equatable {
         self.value = value
         self.type = type
     }
+
+    private enum CodingKeys: String, CodingKey { case id, namespace, key, value, type }
+
+    /// Shopify's `value` is a plain string for most metafields, but at least
+    /// `boolean`-typed ones come back as a raw JSON `true`/`false` instead of
+    /// the string `"true"`/`"false"` — decode leniently and normalize
+    /// whatever primitive shows up to a string, since every consumer here
+    /// (the generic metadata editor, product duplication) treats metafield
+    /// values as plain text regardless of `type`. Hit in practice: one
+    /// mistyped boolean value was enough to fail decoding *every* metafield
+    /// on that product, not just the one field.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        namespace = try c.decode(String.self, forKey: .namespace)
+        key = try c.decode(String.self, forKey: .key)
+        type = try c.decode(String.self, forKey: .type)
+        if let stringValue = try? c.decode(String.self, forKey: .value) {
+            value = stringValue
+        } else if let boolValue = try? c.decode(Bool.self, forKey: .value) {
+            value = boolValue ? "true" : "false"
+        } else if let intValue = try? c.decode(Int.self, forKey: .value) {
+            value = String(intValue)
+        } else if let doubleValue = try? c.decode(Double.self, forKey: .value) {
+            value = String(doubleValue)
+        } else {
+            value = ""
+        }
+    }
 }
 
 /// A metafield to set when creating a product (see `ShopifyClient.createProduct`)

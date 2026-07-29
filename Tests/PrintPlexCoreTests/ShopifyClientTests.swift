@@ -159,6 +159,29 @@ final class ShopifyClientTests: XCTestCase {
         XCTAssertEqual(decoded.metafields[1].type, "number_integer")
     }
 
+    /// Real bug hit in production: a `boolean`-typed metafield (Google &
+    /// YouTube's "Custom product" toggle) came back with `value: true` — a
+    /// raw JSON bool, not the string Shopify sends for most metafields. That
+    /// one field failing to decode took down the *entire* metafields array
+    /// for that product (caught upstream, but silently — the product just
+    /// looked like it had zero metafields at all).
+    func testDecodesNonStringMetafieldValues() throws {
+        let json = """
+        {"metafields": [
+            {"id": 1, "namespace": "google-shopping", "key": "custom_product", "value": true, "type": "boolean"},
+            {"id": 2, "namespace": "custom", "key": "poids_g", "value": 42, "type": "number_integer"},
+            {"id": 3, "namespace": "custom", "key": "ratio", "value": 1.5, "type": "number_decimal"}
+        ]}
+        """
+        struct Wrapper: Codable { let metafields: [ShopifyMetafield] }
+        let decoded = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.metafields.count, 3)
+        XCTAssertEqual(decoded.metafields[0].value, "true")
+        XCTAssertEqual(decoded.metafields[1].value, "42")
+        XCTAssertEqual(decoded.metafields[2].value, "1.5")
+    }
+
     func testLowestPriceAndStatus() {
         let product = ShopifyProduct(
             id: 1, title: "T", status: "active", handle: "t",
