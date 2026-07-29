@@ -382,7 +382,12 @@ public struct ShopifyClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 30
 
-        let (data, response) = try await URLSession.shared.portableData(for: request)
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.portableData(for: request)
+        } catch {
+            throw ShopifyError.wrapNetworkError(error)
+        }
         guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
         guard http.statusCode == 200 else {
             throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
@@ -436,9 +441,19 @@ public struct ShopifyClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(ShopifyProductCreateWrapper(product: payload))
-        request.timeoutInterval = 30
+        // Longer than the other calls here: when `images` carries base64
+        // photo attachments, Shopify has to fetch/decode/store each one
+        // itself before responding, and 30s turned out to not always be
+        // enough for that — a real timeout here previously surfaced as a
+        // raw, unhelpful `NSURLErrorDomain Code=-1001` string.
+        request.timeoutInterval = images.isEmpty ? 30 : 120
 
-        let (data, response) = try await URLSession.shared.portableData(for: request)
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.portableData(for: request)
+        } catch {
+            throw ShopifyError.wrapNetworkError(error)
+        }
         guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
         guard http.statusCode == 200 || http.statusCode == 201 else {
             throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
@@ -488,7 +503,12 @@ public struct ShopifyClient: Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 30
 
-        let (data, response) = try await URLSession.shared.portableData(for: request)
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.portableData(for: request)
+        } catch {
+            throw ShopifyError.wrapNetworkError(error)
+        }
 
         guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
         guard http.statusCode == 200 else {
@@ -525,6 +545,11 @@ public enum ShopifyError: LocalizedError {
     case notConfigured
     case invalidResponse
     case httpError(status: Int, detail: String?)
+    /// The request never got an HTTP response at all — timeout, DNS failure,
+    /// connection reset. Stores only a description (not the underlying
+    /// `Error`) to stay `Sendable`; the message is computed once at the
+    /// throw site where the concrete error type is still known.
+    case networkError(String)
 
     public var errorDescription: String? {
         switch self {
@@ -532,6 +557,8 @@ public enum ShopifyError: LocalizedError {
             return "Credentials non configurés — renseignez l'URL de la boutique et le token d'accès"
         case .invalidResponse:
             return "Réponse Shopify invalide"
+        case .networkError(let detail):
+            return "Erreur réseau vers Shopify : \(detail)"
         case .httpError(let status, let detail):
             // A bare status code alone actively misled here: 401/403/404 really
             // are a credentials/URL problem, but 422 means Shopify *understood*
@@ -569,6 +596,17 @@ public enum ShopifyError: LocalizedError {
         guard let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else { return nil }
         return String(raw.prefix(300))
+    }
+
+    /// Wraps whatever `URLSession` throws before an HTTP response even comes
+    /// back (timeout, DNS failure, connection reset) into a `.networkError`
+    /// with a message worth reading — a raw `NSURLErrorDomain Code=-1001
+    /// "(null)"` reaching the dashboard verbatim isn't useful to anyone.
+    static func wrapNetworkError(_ error: Error) -> ShopifyError {
+        if let urlError = error as? URLError, urlError.code == .timedOut {
+            return .networkError("délai d'attente dépassé — réessayez, ou réduisez le nombre/la taille des photos jointes si vous en avez ajouté")
+        }
+        return .networkError(error.localizedDescription)
     }
 }
 

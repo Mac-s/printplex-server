@@ -49,6 +49,21 @@ final class ShopifyClientTests: XCTestCase {
         XCTAssertTrue(validation.localizedDescription.contains("title: can't be blank"))
     }
 
+    /// Real bug hit in production: a request timeout (e.g. Shopify taking too
+    /// long to fetch/store several base64 photo attachments) threw a raw
+    /// `URLError` straight through, surfacing as an unreadable
+    /// `NSURLErrorDomain Code=-1001 "(null)"` in the dashboard.
+    func testWrapNetworkErrorGivesReadableTimeoutMessage() {
+        let timeout = URLError(.timedOut)
+        let wrapped = ShopifyError.wrapNetworkError(timeout)
+        XCTAssertTrue(wrapped.localizedDescription.contains("délai"))
+        XCTAssertTrue(wrapped.localizedDescription.contains("photos"))
+
+        let other = URLError(.notConnectedToInternet)
+        let wrappedOther = ShopifyError.wrapNetworkError(other)
+        XCTAssertFalse(wrappedOther.localizedDescription.isEmpty)
+    }
+
     func testParseLinkHeader() {
         let header = #"<https://x.myshopify.com/admin/api/2024-01/products.json?page_info=abc123&limit=250>; rel="next", <https://x.myshopify.com/admin/api/2024-01/products.json?page_info=zzz>; rel="previous""#
         XCTAssertEqual(ShopifyClient.parseLinkHeader(header), "abc123")
