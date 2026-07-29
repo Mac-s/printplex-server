@@ -75,6 +75,8 @@ func configure(_ app: Application) async throws {
         app.http.server.configuration.port = port
     }
 
+    app.middleware.use(NoStoreAPIMiddleware())
+
     // Serves Public/ — the vanilla-JS test dashboard — with index.html at "/".
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory, defaultFile: "index.html"))
 

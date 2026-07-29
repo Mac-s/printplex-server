@@ -97,6 +97,39 @@ final class ShopifyClientTests: XCTestCase {
         XCTAssertNil(product.images[1].alt)
     }
 
+    /// The bug this guards against: decoding Shopify's raw (snake_case)
+    /// response worked fine, and re-encoding our own already-decoded struct
+    /// round-tripped fine too (see `testProductEncodesAndDecodesRoundTrip`) —
+    /// but the *encoder* was reusing the *decoder*'s snake_case keys, so the
+    /// JSON this server actually sends to the dashboard still had
+    /// `body_html`/`product_type` instead of `bodyHtml`/`productType`, which
+    /// the JS reads. Only decoding Shopify's real shape and inspecting what
+    /// comes back *out* the other side catches that; a plain encode-then-
+    /// decode round trip (using the same keys both ways) can't.
+    func testDecodedProductReEncodesWithCamelCaseKeysForOurOwnAPI() throws {
+        let shopifyShapedJSON = """
+        {
+            "id": 1, "title": "T", "status": "active", "handle": "t",
+            "body_html": "<p>desc</p>", "product_type": "Cosplay",
+            "variants": [{"id": 1, "price": "10.00", "title": "Default",
+                          "compare_at_price": "15.00"}]
+        }
+        """
+        let product = try JSONDecoder().decode(ShopifyProduct.self, from: Data(shopifyShapedJSON.utf8))
+
+        let reEncoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(product)) as? [String: Any]
+
+        XCTAssertEqual(reEncoded?["bodyHtml"] as? String, "<p>desc</p>")
+        XCTAssertEqual(reEncoded?["productType"] as? String, "Cosplay")
+        XCTAssertNil(reEncoded?["body_html"])
+        XCTAssertNil(reEncoded?["product_type"])
+
+        let variants = reEncoded?["variants"] as? [[String: Any]]
+        XCTAssertEqual(variants?.first?["compareAtPrice"] as? String, "15.00")
+        XCTAssertNil(variants?.first?["compare_at_price"])
+    }
+
     func testMissingOptionalFieldsDefaultGracefully() throws {
         // Minimal response (e.g. a narrower `fields=`) shouldn't fail to decode.
         let json = """

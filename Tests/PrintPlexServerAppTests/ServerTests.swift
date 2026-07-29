@@ -59,6 +59,21 @@ final class ServerTests: XCTestCase {
         }
     }
 
+    /// A stale browser-cached API response is exactly how a real deploy once
+    /// silently kept serving an old product shape (missing fields added
+    /// later) even though the server had long since started returning them —
+    /// every `/api/*` response must tell the browser never to reuse it.
+    func testAPIResponsesAreNeverCached() async throws {
+        try await app.test(.GET, "api/projects") { res async in
+            XCTAssertEqual(res.headers.cacheControl?.noStore, true)
+        }
+        // The static dashboard itself is unaffected — it's fine (expected) for
+        // browsers to cache Public/ assets.
+        try await app.test(.GET, "health") { res async in
+            XCTAssertNil(res.headers.cacheControl)
+        }
+    }
+
     func testPrintersAndMaterials() async throws {
         try await app.test(.GET, "api/printers") { res async throws in
             XCTAssertEqual(res.status, .ok)

@@ -40,7 +40,18 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
         self.images = images
     }
 
-    enum CodingKeys: String, CodingKey {
+    // Shopify's own wire format (snake_case) — used *only* by the custom
+    // decoder below, to parse `products.json` responses. Deliberately not
+    // named `CodingKeys`: naming it that would make the compiler reuse this
+    // same snake_case mapping to *synthesize* `encode(to:)` too, which is
+    // wrong — encoding here means serializing *our own* API response for the
+    // dashboard's JS, which reads camelCase (`product.bodyHtml`). Keeping
+    // this decode-only meant `encode(to:)` was actually round-tripping
+    // `body_html`/`product_type` straight back out to the browser, which had
+    // no property by that name and silently read `undefined` — this file no
+    // longer declares a `CodingKeys` type at all, so Swift synthesizes
+    // `encode(to:)` on its own using the plain (camelCase) property names.
+    private enum ShopifyWireKeys: String, CodingKey {
         case id, title, status, handle, variants, tags, vendor, metafields, images
         case bodyHtml = "body_html"
         case productType = "product_type"
@@ -51,7 +62,7 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
     // fields are defensively optional in case a future `fields=` tweak omits
     // one — same decodeIfPresent pattern as PrinterProfile in PrintEstimator.swift.
     public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let c = try decoder.container(keyedBy: ShopifyWireKeys.self)
         id = try c.decode(Int.self, forKey: .id)
         title = try c.decode(String.self, forKey: .title)
         status = try c.decode(String.self, forKey: .status)
@@ -109,9 +120,25 @@ public struct ShopifyVariant: Codable, Sendable {
         self.compareAtPrice = compareAtPrice
     }
 
-    enum CodingKeys: String, CodingKey {
+    // Decode-only, matching Shopify's own snake_case wire format — kept
+    // deliberately unnamed `CodingKeys` (see `ShopifyProduct.ShopifyWireKeys`
+    // for why) so `encode(to:)` synthesizes separately with plain camelCase
+    // keys for our own API's JSON, which is what the dashboard's JS reads.
+    private enum ShopifyWireKeys: String, CodingKey {
         case id, price, title, sku, option1, option2, option3
         case compareAtPrice = "compare_at_price"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: ShopifyWireKeys.self)
+        id = try c.decode(Int.self, forKey: .id)
+        price = try c.decode(String.self, forKey: .price)
+        title = try c.decode(String.self, forKey: .title)
+        sku = try c.decodeIfPresent(String.self, forKey: .sku)
+        option1 = try c.decodeIfPresent(String.self, forKey: .option1)
+        option2 = try c.decodeIfPresent(String.self, forKey: .option2)
+        option3 = try c.decodeIfPresent(String.self, forKey: .option3)
+        compareAtPrice = try c.decodeIfPresent(String.self, forKey: .compareAtPrice)
     }
 }
 
