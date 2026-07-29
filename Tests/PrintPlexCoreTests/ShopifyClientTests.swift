@@ -26,6 +26,29 @@ final class ShopifyClientTests: XCTestCase {
         XCTAssertTrue(ShopifyCredentials(storeDomain: "shop", accessToken: "token").isConfigured)
     }
 
+    /// A bare status code used to be the *whole* error message — misleading
+    /// for a 422, which means Shopify rejected the request's *content*, not
+    /// the credentials. This checks both shapes Shopify's error bodies
+    /// actually use in practice.
+    func testErrorDetailParsesShopifyErrorShapes() {
+        let stringShape = #"{"errors": "Not Found"}"#
+        XCTAssertEqual(ShopifyError.errorDetail(from: Data(stringShape.utf8)), "Not Found")
+
+        let fieldShape = #"{"errors": {"title": ["can't be blank"], "metafields.0.value": ["is invalid"]}}"#
+        let detail = ShopifyError.errorDetail(from: Data(fieldShape.utf8))
+        XCTAssertEqual(detail, "metafields.0.value: is invalid ; title: can't be blank")
+
+        XCTAssertNil(ShopifyError.errorDetail(from: Data()))
+    }
+
+    func testHttpErrorDescriptionMatchesStatusMeaning() {
+        XCTAssertTrue(ShopifyError.httpError(status: 401, detail: nil).localizedDescription.contains("credentials"))
+        XCTAssertTrue(ShopifyError.httpError(status: 404, detail: nil).localizedDescription.contains("boutique"))
+        let validation = ShopifyError.httpError(status: 422, detail: "title: can't be blank")
+        XCTAssertTrue(validation.localizedDescription.contains("rejetée"))
+        XCTAssertTrue(validation.localizedDescription.contains("title: can't be blank"))
+    }
+
     func testParseLinkHeader() {
         let header = #"<https://x.myshopify.com/admin/api/2024-01/products.json?page_info=abc123&limit=250>; rel="next", <https://x.myshopify.com/admin/api/2024-01/products.json?page_info=zzz>; rel="previous""#
         XCTAssertEqual(ShopifyClient.parseLinkHeader(header), "abc123")

@@ -384,7 +384,9 @@ public struct ShopifyClient: Sendable {
 
         let (data, response) = try await URLSession.shared.portableData(for: request)
         guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
-        guard http.statusCode == 200 else { throw ShopifyError.httpError(http.statusCode) }
+        guard http.statusCode == 200 else {
+            throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
+        }
 
         return try JSONDecoder().decode(ShopifyMetafieldsResponse.self, from: data).metafields
     }
@@ -438,7 +440,9 @@ public struct ShopifyClient: Sendable {
 
         let (data, response) = try await URLSession.shared.portableData(for: request)
         guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
-        guard http.statusCode == 200 || http.statusCode == 201 else { throw ShopifyError.httpError(http.statusCode) }
+        guard http.statusCode == 200 || http.statusCode == 201 else {
+            throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
+        }
 
         return try JSONDecoder().decode(ShopifyProductCreateResponse.self, from: data).product
     }
@@ -487,7 +491,9 @@ public struct ShopifyClient: Sendable {
         let (data, response) = try await URLSession.shared.portableData(for: request)
 
         guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
-        guard http.statusCode == 200 else { throw ShopifyError.httpError(http.statusCode) }
+        guard http.statusCode == 200 else {
+            throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
+        }
 
         let decoded = try JSONDecoder().decode(ShopifyProductsResponse.self, from: data)
         let next    = Self.parseLinkHeader(http.value(forHTTPHeaderField: "Link"))
@@ -518,14 +524,51 @@ public struct ShopifyClient: Sendable {
 public enum ShopifyError: LocalizedError {
     case notConfigured
     case invalidResponse
-    case httpError(Int)
+    case httpError(status: Int, detail: String?)
 
     public var errorDescription: String? {
         switch self {
-        case .notConfigured:       return "Credentials non configurés — renseignez l'URL de la boutique et le token d'accès"
-        case .invalidResponse:     return "Réponse Shopify invalide"
-        case .httpError(let code): return "Erreur HTTP \(code) — vérifiez vos credentials et l'URL de la boutique"
+        case .notConfigured:
+            return "Credentials non configurés — renseignez l'URL de la boutique et le token d'accès"
+        case .invalidResponse:
+            return "Réponse Shopify invalide"
+        case .httpError(let status, let detail):
+            // A bare status code alone actively misled here: 401/403/404 really
+            // are a credentials/URL problem, but 422 means Shopify *understood*
+            // the request and rejected its *content* (a validation error) —
+            // the previous one-size-fits-all message told users to re-check
+            // credentials for a problem that had nothing to do with them.
+            let hint: String
+            switch status {
+            case 401, 403: hint = "vérifiez vos credentials (token / scope)"
+            case 404:      hint = "vérifiez l'URL de la boutique"
+            case 422:      hint = "la requête a été rejetée (données invalides)"
+            default:       hint = "vérifiez vos credentials et l'URL de la boutique"
+            }
+            let suffix = detail.map { " — \($0)" } ?? ""
+            return "Erreur HTTP \(status) — \(hint)\(suffix)"
         }
+    }
+
+    /// Best-effort extraction of Shopify's own error message from a non-2xx
+    /// response body, so failures actually say what Shopify rejected instead
+    /// of just a status code. Shopify's `errors` field is either a plain
+    /// string or a `{field: [messages]}` object depending on the endpoint —
+    /// falls back to the first line of the raw body if neither shape parses.
+    static func errorDetail(from data: Data) -> String? {
+        struct StringErrors: Decodable { let errors: String }
+        struct FieldErrors: Decodable { let errors: [String: [String]] }
+
+        if let parsed = try? JSONDecoder().decode(StringErrors.self, from: data) {
+            return parsed.errors
+        }
+        if let parsed = try? JSONDecoder().decode(FieldErrors.self, from: data) {
+            return parsed.errors.map { field, messages in "\(field): \(messages.joined(separator: ", "))" }
+                .sorted().joined(separator: " ; ")
+        }
+        guard let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else { return nil }
+        return String(raw.prefix(300))
     }
 }
 
