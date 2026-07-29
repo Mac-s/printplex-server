@@ -310,8 +310,13 @@ public struct ShopifyClient: Sendable {
     /// 429 retry/backoff logic, so network round-trip latency alone keeps a
     /// sequential loop comfortably under that for realistic catalog sizes.
     /// A single product's metafields failing to fetch doesn't fail the whole
-    /// sync — it's just left empty for that product.
-    public func fetchAllProducts() async throws -> [ShopifyProduct] {
+    /// sync — it's just left empty for that product, but `onMetafieldsError`
+    /// (if given) still hears about it — silently swallowing every failure
+    /// here previously made a real permissions/scope problem indistinguishable
+    /// from "this product genuinely has no metafields."
+    public func fetchAllProducts(
+        onMetafieldsError: (@Sendable (_ productId: Int, _ error: Error) -> Void)? = nil
+    ) async throws -> [ShopifyProduct] {
         guard credentials.isConfigured else { throw ShopifyError.notConfigured }
 
         var all: [ShopifyProduct] = []
@@ -326,7 +331,12 @@ public struct ShopifyClient: Sendable {
         var withMetafields: [ShopifyProduct] = []
         withMetafields.reserveCapacity(all.count)
         for var product in all {
-            product.metafields = (try? await fetchMetafields(productId: product.id)) ?? []
+            do {
+                product.metafields = try await fetchMetafields(productId: product.id)
+            } catch {
+                onMetafieldsError?(product.id, error)
+                product.metafields = []
+            }
             withMetafields.append(product)
         }
         return withMetafields

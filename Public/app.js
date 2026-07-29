@@ -2284,6 +2284,16 @@ function openDuplicateProductModal(opts = {}) {
         <div class="field"><label>Marque</label><input id="dupVendorInput" /></div>
         <div class="field" style="grid-column:1/-1"><label>Tags (séparés par virgules)</label><input id="dupTagsInput" /></div>
       </div>
+      <div class="form-grid">
+        <div class="field" style="grid-column:1/-1">
+          <label>Titre de la page (SEO — synchronisé avec le titre, modifiable)</label>
+          <input id="dupSeoTitleInput" />
+        </div>
+        <div class="field" style="grid-column:1/-1">
+          <label>Méta-description (SEO)</label>
+          <textarea id="dupSeoDescriptionInput" rows="2"></textarea>
+        </div>
+      </div>
       <div class="chip-editor">
         <label>Variantes</label>
         <div id="dupVariantsList"></div>
@@ -2314,9 +2324,21 @@ function openDuplicateProductModal(opts = {}) {
   const typeInput = overlay.querySelector("#dupTypeInput");
   const vendorInput = overlay.querySelector("#dupVendorInput");
   const tagsInput = overlay.querySelector("#dupTagsInput");
+  const seoTitleInput = overlay.querySelector("#dupSeoTitleInput");
+  const seoDescriptionInput = overlay.querySelector("#dupSeoDescriptionInput");
   const variantsList = overlay.querySelector("#dupVariantsList");
   const metafieldsList = overlay.querySelector("#dupMetafieldsList");
   const photosGrid = overlay.querySelector("#dupPhotosGrid");
+
+  // "Titre de la page" (SEO) is usually just the product title — mirror it
+  // live as the title changes, but stop overwriting the moment the user
+  // types into the SEO field themselves (same "smart default" idea as e.g.
+  // a slug field following a title until manually overridden).
+  let seoTitleTouched = false;
+  seoTitleInput.addEventListener("input", () => { seoTitleTouched = true; });
+  titleInput.addEventListener("input", () => {
+    if (!seoTitleTouched) seoTitleInput.value = titleInput.value;
+  });
 
   function renderVariants() {
     variantsList.innerHTML = variants.map((v, i) => `
@@ -2393,10 +2415,22 @@ function openDuplicateProductModal(opts = {}) {
     typeInput.value = product?.productType || "";
     vendorInput.value = product?.vendor || "";
     tagsInput.value = product ? shopifyTagList(product).join(", ") : "";
+    // SEO title: reset to "follow the title" on every template switch — the
+    // meta-description below is the one field actually worth pulling from
+    // the template, since unlike the title it isn't just retyped anyway.
+    seoTitleTouched = false;
+    seoTitleInput.value = titleInput.value;
+    seoDescriptionInput.value = product?.metafields?.find((m) => m.namespace === "global" && m.key === "description_tag")?.value || "";
     variants = product?.variants?.length
       ? product.variants.map((v) => ({ title: v.title || "", price: v.price || "", sku: v.sku || "" }))
       : [{ title: "", price: "", sku: "" }];
-    metafields = product?.metafields ? product.metafields.map((m) => ({ ...m })) : [];
+    // global.title_tag/description_tag are surfaced as their own dedicated
+    // fields above, not duplicated in the generic metadata list.
+    metafields = product?.metafields
+      ? product.metafields
+          .filter((m) => !(m.namespace === "global" && (m.key === "title_tag" || m.key === "description_tag")))
+          .map((m) => ({ ...m }))
+      : [];
     renderVariants();
     renderMetafields();
     // Photos deliberately untouched — the whole point is they keep coming
@@ -2422,7 +2456,11 @@ function openDuplicateProductModal(opts = {}) {
           variants: variants
             .filter((v) => v.price.trim() !== "")
             .map((v) => ({ price: v.price.trim(), title: v.title.trim() || null, sku: v.sku.trim() || null })),
-          metafields: metafields.map((m) => ({ namespace: m.namespace, key: m.key, value: m.value, type: m.type })),
+          metafields: [
+            ...metafields.map((m) => ({ namespace: m.namespace, key: m.key, value: m.value, type: m.type })),
+            ...(seoTitleInput.value.trim() ? [{ namespace: "global", key: "title_tag", value: seoTitleInput.value.trim(), type: "single_line_text_field" }] : []),
+            ...(seoDescriptionInput.value.trim() ? [{ namespace: "global", key: "description_tag", value: seoDescriptionInput.value.trim(), type: "multi_line_text_field" }] : []),
+          ],
           imageFileIds: opts.projectImages ? [...selectedImageIds] : undefined,
         }),
       });

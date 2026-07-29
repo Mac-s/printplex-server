@@ -29,7 +29,13 @@ actor ShopifyCache {
     @discardableResult
     func sync() async throws -> Int {
         do {
-            products = try await client.fetchAllProducts()
+            products = try await client.fetchAllProducts(onMetafieldsError: { productId, error in
+                // `print` rather than a logging framework dependency — this
+                // just needs to land in `docker compose logs`, and a scope/
+                // permissions error here otherwise looks identical to "this
+                // product genuinely has no metafields" from every other angle.
+                print("[ShopifyCache] Échec de récupération des métadonnées pour le produit \(productId) : \(error)")
+            })
             lastSyncDate = Date()
             syncError = nil
         } catch {
