@@ -42,6 +42,12 @@ const FILE_ROLE_ICON = {
 };
 const SHOPIFY_STATUS_LABEL = { active: "En vente", draft: "Brouillon", archived: "Archivé", none: "Non synchronisé" };
 
+// Flat checkmark-circle icon (SF Symbols' checkmark.circle.fill/circle glyphs
+// aren't embeddable outside Apple platforms — this is a vector approximation
+// in the same minimal style, System Green when checked).
+const PRINTED_CHECK_SVG = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="10" fill="#34c759"/><path d="M7 12.5l3.2 3.2L17 8.8" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const PRINTED_CIRCLE_SVG = `<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="9.3" fill="none" stroke="#fff" stroke-width="1.6" opacity="0.9"/></svg>`;
+
 // ───────────────────────── Formatting helpers ─────────────────────────
 
 function escapeHtml(s) {
@@ -823,7 +829,7 @@ function projectCardHtml(project, opts = {}) {
           ? `<img src="${coverUrl}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'cover-placeholder',textContent:'🧊'}))" />`
           : `<div class="cover-placeholder">🧊</div>`}
         ${product ? `<div class="shopify-badge"><span class="dot ${product.status === "active" ? "on" : "off"}"></span>${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}</div>` : ""}
-        ${project.alreadyPrinted ? `<div class="printed-badge" title="Déjà imprimé">✅</div>` : ""}
+        ${printedBadgeHtml(Boolean(project.alreadyPrinted))}
         ${opts.missing ? `<div class="missing-chips">${missingMetadataLabels(project).map((m) => `<span class="missing-chip">${escapeHtml(m)}</span>`).join("")}</div>` : ""}
       </div>
       <div class="card-body">
@@ -839,9 +845,46 @@ function projectCardHtml(project, opts = {}) {
     </div>`;
 }
 
+/// Always rendered (checked or not) so a batch of already-printed projects
+/// can be ticked off straight from the grid, no need to open each one.
+function printedBadgeHtml(printed) {
+  const title = printed ? "Déjà imprimé — cliquer pour décocher" : "Marquer comme déjà imprimé";
+  return `<button type="button" class="printed-badge${printed ? " checked" : ""}" title="${title}">${printed ? PRINTED_CHECK_SVG : PRINTED_CIRCLE_SVG}</button>`;
+}
+
+/// Updates every on-screen copy of a project's badge (e.g. it can appear both
+/// in "Ajouté récemment" and the main grid at once) without a full re-render.
+function syncPrintedBadges(projectId, printed) {
+  document.querySelectorAll(`.project-card[data-open="${projectId}"] .printed-badge`).forEach((el) => {
+    el.outerHTML = printedBadgeHtml(printed);
+  });
+}
+
+async function toggleAlreadyPrinted(projectId) {
+  const project = state.projects.find((p) => p.id === projectId);
+  if (!project) return;
+  const next = !project.alreadyPrinted;
+  syncPrintedBadges(projectId, next); // optimistic
+  try {
+    await api(`/api/projects/${projectId}`, { method: "PATCH", body: JSON.stringify({ alreadyPrinted: next }) });
+    updateLocalProject(projectId, { alreadyPrinted: next });
+    renderSidebar(); // "Impression" group counts
+  } catch (e) {
+    syncPrintedBadges(projectId, !next); // revert
+    alert(`Échec de la mise à jour : ${e.message}`);
+  }
+}
+
 function wireGridCardClicks(container) {
   container.querySelectorAll("[data-open]").forEach((el) => {
-    el.addEventListener("click", () => openProject(el.dataset.open));
+    el.addEventListener("click", (evt) => {
+      if (evt.target.closest(".printed-badge")) {
+        evt.stopPropagation();
+        toggleAlreadyPrinted(el.dataset.open);
+        return;
+      }
+      openProject(el.dataset.open);
+    });
   });
 }
 
