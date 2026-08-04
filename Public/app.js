@@ -1583,8 +1583,9 @@ function wireShopifySection(project) {
   // difference here: the new product is linked to *this* project automatically,
   // sparing the extra trip to the manual-assignment select afterwards.
   document.getElementById("btnCreateFromExisting")?.addEventListener("click", () => {
+    const instructionNames = new Set(project.sourceInstructionImages || []);
     const projectImages = (project.files || [])
-      .filter((f) => f.fileRole === "renderImage")
+      .filter((f) => f.fileRole === "renderImage" && !instructionNames.has(`${f.fileName}.${f.fileExtension}`))
       .map((f) => ({ id: f.id, url: `/api/files/${f.id}/thumbnail`, filename: `${f.fileName}.${f.fileExtension}` }));
     openDuplicateProductModal({
       contextHint: `Le produit créé sera automatiquement associé à « ${project.name} ».`,
