@@ -249,8 +249,14 @@ function projectHasCompleteMetadata(p) {
   return Boolean(p.category) && Boolean(p.creator && p.creator.length)
     && (p.suggestedMaterials || []).length > 0 && (p.tags || []).length > 0;
 }
+// Creator is filled in manually (e.g. when a design is downloaded straight from
+// ForgeCore without running the scraper yet) — flag it as a to-do until
+// `import.js` has actually run and filled in `sourceUrl`.
+function needsForgeCoreImport(p) {
+  return (p.creator || "").trim().toLowerCase() === "forgecore" && !p.sourceUrl;
+}
 function incompleteProjects() {
-  return state.projects.filter((p) => !projectHasCompleteMetadata(p));
+  return state.projects.filter((p) => !projectHasCompleteMetadata(p) || needsForgeCoreImport(p));
 }
 function missingMetadataLabels(p) {
   const missing = [];
@@ -258,6 +264,7 @@ function missingMetadataLabels(p) {
   if (!p.creator || !p.creator.length) missing.push("Créateur");
   if (!(p.suggestedMaterials || []).length) missing.push("Matériaux");
   if (!(p.tags || []).length) missing.push("Tags");
+  if (needsForgeCoreImport(p)) missing.push("🔨 Import ForgeCore");
   return missing;
 }
 function recentlyAdded() {
