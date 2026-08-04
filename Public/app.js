@@ -1169,9 +1169,11 @@ function wireProjectDetailEvents(project) {
     });
 
   wireSourceFieldsAutosave(project);
-  wireChipEditor("sourceHardwareChipList", project.sourceHardware || [],
-    (list) => updateChipField(project, "sourceHardware", list),
-    null);
+  if (project.sourceUrl) {
+    wireChipEditor("sourceHardwareChipList", project.sourceHardware || [],
+      (list) => updateChipField(project, "sourceHardware", list),
+      null);
+  }
 
   wireImageStrip(project);
   wireActionsSection(project, (project.files || []).filter((f) => f.fileRole === "modelPart"));
