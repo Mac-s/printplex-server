@@ -278,6 +278,84 @@ final class ServerTests: XCTestCase {
         XCTAssertEqual(dict?["categorie"] as? String, "Tests")  // preserved
     }
 
+    /// Same class of bug as `already_printed` before it: the DB write alone
+    /// isn't enough — `LibraryScanner.updateProjectInfo`'s merge dictionary
+    /// has to know about a field too, or it silently never reaches info.json
+    /// even though the API response looks correct.
+    func testPatchPersistsSourceInfoToInfoJson() async throws {
+        try await addLibrary()
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var projectID: UUID?
+        try await app.test(.GET, "api/projects") { res async throws in
+            projectID = try res.content.decode([ProjectDTO].self).first?.id
+        }
+        let id = try XCTUnwrap(projectID)
+
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(
+                sourceUrl: "https://prinnit.com/ForgeCore/design/abc123",
+                sourceHardware: ["N52 Magnet (6 x 2mm) × 8"],
+                sourceEstimatedWeight: "1.16kg",
+                sourceEstimatedPrintTime: "2d 5h 44m",
+                sourceInstructionImages: ["forgecore-instructions-1.webp"]
+            ))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertEqual(project.sourceUrl, "https://prinnit.com/ForgeCore/design/abc123")
+            XCTAssertEqual(project.sourceHardware, ["N52 Magnet (6 x 2mm) × 8"])
+            XCTAssertEqual(project.sourceEstimatedWeight, "1.16kg")
+            XCTAssertEqual(project.sourceEstimatedPrintTime, "2d 5h 44m")
+            XCTAssertEqual(project.sourceInstructionImages, ["forgecore-instructions-1.webp"])
+        })
+
+        let infoURL = mediaDir.appendingPathComponent("Groupe/Cube/info.json")
+        let dict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: infoURL)) as? [String: Any]
+        XCTAssertEqual(dict?["source_url"] as? String, "https://prinnit.com/ForgeCore/design/abc123")
+        XCTAssertEqual(dict?["source_hardware"] as? [String], ["N52 Magnet (6 x 2mm) × 8"])
+        XCTAssertEqual(dict?["source_estimated_weight"] as? String, "1.16kg")
+        XCTAssertEqual(dict?["source_estimated_print_time"] as? String, "2d 5h 44m")
+        XCTAssertEqual(dict?["source_instruction_images"] as? [String], ["forgecore-instructions-1.webp"])
+    }
+
+    /// Imported assembly-instruction images are plain `renderImage`-role
+    /// files on disk like any product photo — without this exclusion, one
+    /// could get auto-picked as the project's cover image, or inflate the
+    /// "N photos" count shown on its grid card.
+    func testInstructionImagesExcludedFromCoverAndImageCount() async throws {
+        try await addLibrary()
+
+        let projectDir = mediaDir.appendingPathComponent("Groupe/CasqueTest")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try Data("fake png".utf8).write(to: projectDir.appendingPathComponent("photo-produit.png"))
+        try Data("fake instructions".utf8).write(to: projectDir.appendingPathComponent("forgecore-instructions-1.png"))
+        try Data(#"{"nom": "Casque Test"}"#.utf8).write(to: projectDir.appendingPathComponent("info.json"))
+
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var project: ProjectDTO?
+        try await app.test(.GET, "api/projects") { res async throws in
+            project = try res.content.decode([ProjectDTO].self).first { $0.name == "Casque Test" }
+        }
+        let id = try XCTUnwrap(project?.id)
+
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(sourceInstructionImages: ["forgecore-instructions-1.png"]))
+        }, afterResponse: { res async in
+            XCTAssertEqual(res.status, .ok)
+        })
+
+        try await app.test(.GET, "api/projects") { res async throws in
+            let updated = try XCTUnwrap(try res.content.decode([ProjectDTO].self).first { $0.name == "Casque Test" })
+            // Only the real product photo counts — the instructions image is excluded.
+            XCTAssertEqual(updated.imageCount, 1)
+            let cover = try await FileModel.find(updated.coverFileId, on: app.db)
+            XCTAssertEqual(cover?.fileName, "photo-produit")
+        }
+    }
+
     /// `category`/`creator` are plain `String?` — JSON can't distinguish
     /// "omitted" from "explicitly null" there, so an empty string is the
     /// sidebar's "Supprimer" convention for clearing the field.

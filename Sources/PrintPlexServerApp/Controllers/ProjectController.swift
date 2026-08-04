@@ -12,6 +12,11 @@ struct ProjectUpdateRequest: Content {
     var multiColor: Bool?
     var notes: String?
     var alreadyPrinted: Bool?
+    var sourceUrl: String?
+    var sourceHardware: [String]?
+    var sourceEstimatedWeight: String?
+    var sourceEstimatedPrintTime: String?
+    var sourceInstructionImages: [String]?
     var shopifyProductId: String?
     var coverImageFileName: String?
 }
@@ -88,6 +93,11 @@ struct ProjectController: RouteCollection {
         if let v = body.multiColor { model.multiColor = v }
         if let v = body.notes { model.notes = v }
         if let v = body.alreadyPrinted { model.alreadyPrinted = v }
+        if let v = body.sourceUrl { model.sourceUrl = v.isEmpty ? nil : v }
+        if let v = body.sourceHardware { model.sourceHardware = v }
+        if let v = body.sourceEstimatedWeight { model.sourceEstimatedWeight = v.isEmpty ? nil : v }
+        if let v = body.sourceEstimatedPrintTime { model.sourceEstimatedPrintTime = v.isEmpty ? nil : v }
+        if let v = body.sourceInstructionImages { model.sourceInstructionImages = v }
         if let v = body.shopifyProductId { model.shopifyProductId = v }
         if let v = body.coverImageFileName { model.coverImageFileName = v }
         try await model.save(on: req.db)
@@ -102,6 +112,11 @@ struct ProjectController: RouteCollection {
             if let v = body.multiColor { info.multi_couleur = v }
             if let v = body.notes { info.notes = v }
             if let v = body.alreadyPrinted { info.deja_imprime = v }
+            if let v = body.sourceUrl { info.source_url = v.isEmpty ? nil : v }
+            if let v = body.sourceHardware { info.source_hardware = v }
+            if let v = body.sourceEstimatedWeight { info.source_estimated_weight = v.isEmpty ? nil : v }
+            if let v = body.sourceEstimatedPrintTime { info.source_estimated_print_time = v.isEmpty ? nil : v }
+            if let v = body.sourceInstructionImages { info.source_instruction_images = v }
             if let v = body.shopifyProductId { info.shopify_product_id = v }
             if let v = body.coverImageFileName { info.image_principale = v }
         }

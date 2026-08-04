@@ -37,6 +37,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(CreateLibrariesSchema())
     app.migrations.add(AddPlateStatsToFiles())
     app.migrations.add(AddAlreadyPrintedToProjects())
+    app.migrations.add(AddSourceInfoToProjects())
     try await app.autoMigrate()
 
     try await seedReferenceDataIfNeeded(app)

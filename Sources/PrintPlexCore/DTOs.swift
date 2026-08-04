@@ -154,6 +154,18 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
     public var multiColor: Bool?
     public var notes: String?
     public var alreadyPrinted: Bool?
+    /// Link back to the design's page on whatever site it came from.
+    public var sourceUrl: String?
+    /// Free-text hardware line items from the design's source (e.g. magnets).
+    public var sourceHardware: [String]
+    /// The design's own weight/print-time estimate — kept separate from
+    /// PrintPlex's own computed `PrintEstimate`, not a substitute for it.
+    public var sourceEstimatedWeight: String?
+    public var sourceEstimatedPrintTime: String?
+    /// Filenames of imported instruction images, matched against `files` by
+    /// the dashboard to render them in their own section — excluded from
+    /// the regular photo gallery and cover-image selection.
+    public var sourceInstructionImages: [String]
 
     /// Shopify integration — explicit product ID override (nil = auto-match by name)
     public var shopifyProductId: String?
@@ -173,7 +185,11 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
                 coverImageFileName: String? = nil, projectDescription: String? = nil,
                 category: String? = nil, creator: String? = nil, tags: [String] = [],
                 suggestedMaterials: [String] = [], multiColor: Bool? = nil,
-                notes: String? = nil, alreadyPrinted: Bool? = nil, shopifyProductId: String? = nil,
+                notes: String? = nil, alreadyPrinted: Bool? = nil,
+                sourceUrl: String? = nil, sourceHardware: [String] = [],
+                sourceEstimatedWeight: String? = nil, sourceEstimatedPrintTime: String? = nil,
+                sourceInstructionImages: [String] = [],
+                shopifyProductId: String? = nil,
                 files: [FileDTO]? = nil, coverFileId: UUID? = nil,
                 partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0) {
         self.id = id
@@ -190,6 +206,11 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
         self.multiColor = multiColor
         self.notes = notes
         self.alreadyPrinted = alreadyPrinted
+        self.sourceUrl = sourceUrl
+        self.sourceHardware = sourceHardware
+        self.sourceEstimatedWeight = sourceEstimatedWeight
+        self.sourceEstimatedPrintTime = sourceEstimatedPrintTime
+        self.sourceInstructionImages = sourceInstructionImages
         self.coverFileId = coverFileId
         self.partsCount = partsCount
         self.totalFileCount = totalFileCount

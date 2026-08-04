@@ -1130,6 +1130,8 @@ function renderProjectDetail(project) {
 
     ${notesSectionHtml(project)}
 
+    ${sourceSectionHtml(project)}
+
     ${actionsSectionHtml(project, modelParts)}
 
     ${shopifySectionHtml(project)}
@@ -1165,6 +1167,11 @@ function wireProjectDetailEvents(project) {
       const all = new Set(state.projects.flatMap((p) => p.tags || []));
       return [...all].filter((v) => v.toLowerCase().includes(q) && !(project.tags || []).includes(v)).slice(0, 8);
     });
+
+  wireSourceFieldsAutosave(project);
+  wireChipEditor("sourceHardwareChipList", project.sourceHardware || [],
+    (list) => updateChipField(project, "sourceHardware", list),
+    null);
 
   wireImageStrip(project);
   wireActionsSection(project, (project.files || []).filter((f) => f.fileRole === "modelPart"));
@@ -1282,10 +1289,75 @@ function notesSectionHtml(project) {
   return `<div class="section"><div class="section-title">📝 Notes</div><p class="detail-notes">${escapeHtml(project.notes)}</p></div>`;
 }
 
+// ── Source (link back to the design's original page + hardware it needs) ──
+// Populated either by hand or via an external import (e.g. the ForgeCore
+// scraper's import.js) — nothing here is inferred from a scan.
+
+// Matches `sourceInstructionImages` filenames against the project's already-
+// scanned `files` list to get real FileDTOs (with ids) to render thumbnails
+// for — the info.json field only stores filenames, not file ids.
+function sourceInstructionImageFiles(project) {
+  const names = new Set(project.sourceInstructionImages || []);
+  return (project.files || []).filter((f) => names.has(`${f.fileName}.${f.fileExtension}`));
+}
+
+function sourceSectionHtml(project) {
+  if (!project.sourceUrl) return "";
+  const instructionFiles = sourceInstructionImageFiles(project);
+  return `
+    <div class="section">
+      <div class="section-title">🔨 ForgeCore</div>
+      <div class="field" style="margin-bottom:10px">
+        <label>Lien vers la fiche d'origine</label>
+        <div style="display:flex; gap:8px; align-items:center">
+          <input id="detailSourceUrlInput" style="flex:1" value="${escapeHtml(project.sourceUrl ?? "")}" placeholder="https://…" autocomplete="off" />
+          ${project.sourceUrl ? `<a class="btn btn-sm" href="${escapeHtml(project.sourceUrl)}" target="_blank" rel="noopener">Voir</a>` : ""}
+        </div>
+      </div>
+      <div class="detail-metadata-row">
+        <div class="meta-field"><label>⚖️ Poids estimé (designer)</label><input id="detailSourceWeightInput" value="${escapeHtml(project.sourceEstimatedWeight ?? "")}" placeholder="ex. 1.16kg" autocomplete="off" /></div>
+        <div class="meta-field"><label>⏱️ Temps estimé (designer)</label><input id="detailSourcePrintTimeInput" value="${escapeHtml(project.sourceEstimatedPrintTime ?? "")}" placeholder="ex. 2d 5h 44m" autocomplete="off" /></div>
+      </div>
+      <p class="hint" style="margin:2px 0 12px">Estimation du designer — distincte de l'estimation PrintPlex plus bas, calculée pour ton imprimante/matériau.</p>
+      ${chipEditorHtml("sourceHardwareChipList", "Matériel nécessaire", "🔩", project.sourceHardware || [], "chip-material")}
+      ${instructionFiles.length ? `
+        <div class="chip-editor">
+          <label>📋 Instructions de montage</label>
+          <div class="image-strip">
+            ${instructionFiles.map((f) => `
+              <div class="image-strip-item">
+                <img src="/api/files/${f.id}/thumbnail" onerror="this.closest('.image-strip-item').remove()" />
+              </div>`).join("")}
+          </div>
+        </div>` : ""}
+    </div>`;
+}
+
+function wireSourceFieldsAutosave(project) {
+  if (!project.sourceUrl) return;
+  const fields = [
+    ["detailSourceUrlInput", "sourceUrl"],
+    ["detailSourceWeightInput", "sourceEstimatedWeight"],
+    ["detailSourcePrintTimeInput", "sourceEstimatedPrintTime"],
+  ];
+  for (const [inputId, fieldKey] of fields) {
+    const input = document.getElementById(inputId);
+    const save = () => flushDetailSave(project.id, () => ({ [fieldKey]: input.value.trim() }));
+    input.addEventListener("input", () => scheduleDetailSave(save));
+    input.addEventListener("blur", save);
+  }
+}
+
 // ── Image gallery strip (natural aspect ratio, cover-setting via context menu) ──
 
 function imageStripHtml(project) {
-  const images = (project.files || []).filter((f) => f.fileRole === "renderImage");
+  // Imported instruction images are `renderImage`-role files like any photo
+  // — excluded here (shown in their own "ForgeCore" section instead) so they
+  // don't get mixed into the product photo gallery or picked as the cover.
+  const instructionNames = new Set(project.sourceInstructionImages || []);
+  const images = (project.files || []).filter(
+    (f) => f.fileRole === "renderImage" && !instructionNames.has(`${f.fileName}.${f.fileExtension}`)
+  );
   if (images.length === 0) return "";
   const cover = project.coverImageFileName;
   const ordered = [...images].sort((a, b) => {
