@@ -17,8 +17,16 @@ const state = {
   printers: [],
   materials: [],
   view: "grid",           // "grid" | "project" | "settings"
-  filter: { type: "all" },// {type:"all"|"todo"} | {type:"kind"|"shopify", value} | {type:"category"|"tag"|"material"|"creator"}
-  selected: { category: new Set(), tag: new Set(), material: new Set(), creator: new Set() },
+  // {type:"all"|"todo"} — full-page views, unrelated to the combinable filters below.
+  // {type:"kind", value} | {type:"shopifyOrphans"} — exclusive special views (flat file
+  // list / products list, not a project grid), also unrelated to the combinable filters.
+  // {type:"filtered"} — project grid narrowed by whichever `selected` sets below are
+  // non-empty, ANDed together across fields (e.g. creator=ForgeCore AND printed=true).
+  filter: { type: "all" },
+  selected: {
+    category: new Set(), tag: new Set(), material: new Set(), creator: new Set(),
+    printed: new Set(), shopify: new Set(),
+  },
   // "Categories"/"Materiaux"/"Tags"/"Types 3D" tend to accumulate a lot of
   // entries — collapsed by default so the sidebar opens uncluttered; "creator"
   // and "printed" stay expanded since they're short.
@@ -33,7 +41,24 @@ const FILTER_FIELDS = {
   tag:      { label: "Tags",       icon: "🏷️", multivalued: true,  rename: false, getValues: (p) => p.tags || [] },
   material: { label: "Materiaux",  icon: "🧵", multivalued: true,  rename: true,  getValues: (p) => p.suggestedMaterials || [] },
   creator:  { label: "Createurs",  icon: "👤", multivalued: false, rename: true,  getValues: (p) => (p.creator ? [p.creator] : []) },
+  // Impression / Shopify have their own bespoke sidebar blocks (icons + French
+  // labels per value, e.g. "Déjà imprimé") rather than the generic value-list
+  // renderer below — `custom: true` keeps them out of that generic loop while
+  // still letting them combine with the other fields via `state.selected`.
+  printed:  { label: "Impression", custom: true, multivalued: false, getValues: (p) => [p.alreadyPrinted ? "printed" : "not-printed"] },
+  shopify:  { label: "Shopify",    custom: true, multivalued: false, getValues: (p) => [shopifyStatusOf(p)] },
 };
+const FILTER_VALUE_LABELS = {
+  printed: { printed: "Déjà imprimé", "not-printed": "Non imprimé" },
+};
+// `shopify`'s labels come from SHOPIFY_STATUS_LABEL, declared further below —
+// looked up lazily here (at call time) rather than folded into
+// FILTER_VALUE_LABELS above, since that object literal evaluates immediately
+// and SHOPIFY_STATUS_LABEL wouldn't exist yet at that point in the script.
+function filterValueLabel(key, value) {
+  if (key === "shopify") return SHOPIFY_STATUS_LABEL[value] || value;
+  return FILTER_VALUE_LABELS[key]?.[value] || value;
+}
 
 const FILE_KIND_LABELS = { stl: "STL", threeMF: "3MF", obj: "OBJ", step: "STEP" };
 const FILE_KIND_ICON = { stl: "🧊", threeMF: "🧊", obj: "🔄", step: "📐" };
@@ -358,34 +383,59 @@ function applySearch(projects) {
 
 // ───────────────────────── Filter state transitions ─────────────────────────
 
-function clearAllMultiSelects(except) {
-  for (const k of Object.keys(FILTER_FIELDS)) {
-    if (k !== except) state.selected[k].clear();
-  }
+function clearAllMultiSelects() {
+  for (const k of Object.keys(FILTER_FIELDS)) state.selected[k].clear();
 }
 
+function anySelectionActive() {
+  return Object.keys(FILTER_FIELDS).some((k) => state.selected[k].size > 0);
+}
+
+// Intersects every non-empty field's matches — e.g. creator={ForgeCore} AND
+// printed={printed} narrows down to ForgeCore projects that are also marked
+// printed, instead of one field's pick wiping out another's.
+function projectsMatchingAllSelected() {
+  let result = state.projects;
+  for (const key of Object.keys(FILTER_FIELDS)) {
+    const set = state.selected[key];
+    if (set.size === 0) continue;
+    const matchingIds = new Set(projectsMatchingFilter(key, set).map((p) => p.id));
+    result = result.filter((p) => matchingIds.has(p.id));
+  }
+  return result;
+}
+
+function activeFilterTitle() {
+  const segments = Object.keys(FILTER_FIELDS)
+    .map((key) => [...state.selected[key]].map((v) => filterValueLabel(key, v)).sort())
+    .filter((values) => values.length > 0)
+    .map((values) => values.join("/"));
+  return segments.join(" + ") || "Tous les projets";
+}
+
+// "all"/"todo"/"kind"/"shopifyOrphans" are exclusive full-page views (a
+// different view entirely, not a project grid respecting `selected`) — so
+// switching to one of them resets whatever combinable filters were active.
 function setSingleFilter(type, value) {
   state.filter = { type, value };
-  clearAllMultiSelects(null);
+  clearAllMultiSelects();
   showGrid({ keepFilter: true });
 }
 
+// Toggles one value within one field's selection, without touching any
+// other field's selection — this is what lets creator+printed (etc.) combine
+// instead of cancelling each other out.
 function toggleMultiFilter(key, value) {
   const set = state.selected[key];
-  if (set.has(value)) {
-    set.delete(value);
-    if (set.size === 0 && state.filter.type === key) state.filter = { type: "all" };
-  } else {
-    set.add(value);
-    state.filter = { type: key };
-    clearAllMultiSelects(key);
-  }
+  if (set.has(value)) set.delete(value);
+  else set.add(value);
+  state.filter = anySelectionActive() ? { type: "filtered" } : { type: "all" };
   showGrid({ keepFilter: true });
 }
 
 function clearMultiFilter(key) {
   state.selected[key].clear();
-  if (state.filter.type === key) state.filter = { type: "all" };
+  state.filter = anySelectionActive() ? { type: "filtered" } : { type: "all" };
   showGrid({ keepFilter: true });
 }
 
@@ -402,8 +452,8 @@ function groupHtml(id, title, bodyHtml) {
     </div>`;
 }
 
-function filterItemHtml({ icon, label, count, active, action, value }) {
-  return `<button class="filter-item ${active ? "active" : ""}" data-action="${action}" ${value != null ? `data-value="${escapeHtml(value)}"` : ""}>
+function filterItemHtml({ icon, label, count, active, action, value, key }) {
+  return `<button class="filter-item ${active ? "active" : ""}" data-action="${action}" ${key != null ? `data-key="${escapeHtml(key)}"` : ""} ${value != null ? `data-value="${escapeHtml(value)}"` : ""}>
     <span class="fi-icon">${icon}</span><span class="fi-label">${escapeHtml(label)}</span><span class="fi-count">${count}</span>
   </button>`;
 }
@@ -422,17 +472,22 @@ function renderSidebar() {
   }
   html += `</div>`;
 
-  // Impression — déjà imprimé / non imprimé
+  // Impression — déjà imprimé / non imprimé (combinable with the other fields)
   if (state.projects.length > 0) {
     const printedCount = projectsMatchingPrinted(true).length;
     const notPrintedCount = projectsMatchingPrinted(false).length;
     let body = "";
-    body += filterItemHtml({ icon: "✅", label: "Déjà imprimé", count: printedCount, active: state.filter.type === "printed" && state.filter.value === true, action: "printed", value: "true" });
-    body += filterItemHtml({ icon: "⭕", label: "Non imprimé", count: notPrintedCount, active: state.filter.type === "printed" && state.filter.value === false, action: "printed", value: "false" });
+    body += filterItemHtml({ icon: "✅", label: "Déjà imprimé", count: printedCount, active: state.selected.printed.has("printed"), action: "multi", key: "printed", value: "printed" });
+    body += filterItemHtml({ icon: "⭕", label: "Non imprimé", count: notPrintedCount, active: state.selected.printed.has("not-printed"), action: "multi", key: "printed", value: "not-printed" });
+    if (state.selected.printed.size > 0) {
+      body += `<button class="filter-clear" data-action="clear" data-key="printed">Effacer la sélection</button>`;
+    }
     html += groupHtml("printed", "Impression", body);
   }
 
-  // Shopify — only once something has actually been synced
+  // Shopify status is combinable with the other fields; "produits sans
+  // projet" isn't a project attribute at all (it lists orphan Shopify
+  // products, not projects) so it stays an exclusive full-page view.
   if (state.shopifyProducts.length > 0) {
     const counts = {
       active: projectsMatchingShopifyStatus("active").length,
@@ -441,10 +496,13 @@ function renderSidebar() {
       none: projectsMatchingShopifyStatus("none").length,
     };
     let body = "";
-    if (counts.active > 0) body += filterItemHtml({ icon: "✅", label: "En vente", count: counts.active, active: state.filter.type === "shopify" && state.filter.value === "active", action: "shopify", value: "active" });
-    if (counts.draft > 0) body += filterItemHtml({ icon: "◌", label: "Brouillon", count: counts.draft, active: state.filter.type === "shopify" && state.filter.value === "draft", action: "shopify", value: "draft" });
-    if (counts.archived > 0) body += filterItemHtml({ icon: "📦", label: "Archivé", count: counts.archived, active: state.filter.type === "shopify" && state.filter.value === "archived", action: "shopify", value: "archived" });
-    body += filterItemHtml({ icon: "➖", label: "Non synchronisé", count: counts.none, active: state.filter.type === "shopify" && state.filter.value === "none", action: "shopify", value: "none" });
+    if (counts.active > 0) body += filterItemHtml({ icon: "✅", label: "En vente", count: counts.active, active: state.selected.shopify.has("active"), action: "multi", key: "shopify", value: "active" });
+    if (counts.draft > 0) body += filterItemHtml({ icon: "◌", label: "Brouillon", count: counts.draft, active: state.selected.shopify.has("draft"), action: "multi", key: "shopify", value: "draft" });
+    if (counts.archived > 0) body += filterItemHtml({ icon: "📦", label: "Archivé", count: counts.archived, active: state.selected.shopify.has("archived"), action: "multi", key: "shopify", value: "archived" });
+    body += filterItemHtml({ icon: "➖", label: "Non synchronisé", count: counts.none, active: state.selected.shopify.has("none"), action: "multi", key: "shopify", value: "none" });
+    if (state.selected.shopify.size > 0) {
+      body += `<button class="filter-clear" data-action="clear" data-key="shopify">Effacer la sélection</button>`;
+    }
     body += filterItemHtml({ icon: "🧩", label: "Produits sans projet", count: unmatchedShopifyProducts().length, active: state.filter.type === "shopifyOrphans", action: "shopifyOrphans" });
     html += groupHtml("shopify", "Shopify", body);
   }
@@ -462,8 +520,11 @@ function renderSidebar() {
     html += groupHtml("types", "Types 3D", body);
   }
 
-  // Categories / Tags / Materiaux / Createurs
+  // Categories / Tags / Materiaux / Createurs (printed/shopify have their
+  // own bespoke blocks above, rendered from the same FILTER_FIELDS/selected
+  // machinery — skipped here via `custom`)
   for (const [key, cfg] of Object.entries(FILTER_FIELDS)) {
+    if (cfg.custom) continue;
     const values = visibleFilterValues(key);
     if (values.length === 0) continue;
     let body = values.map((v) => {
@@ -499,9 +560,7 @@ function wireSidebarEvents() {
       case "all": setSingleFilter("all"); break;
       case "todo": setSingleFilter("todo"); break;
       case "kind": setSingleFilter("kind", btn.dataset.value); break;
-      case "shopify": setSingleFilter("shopify", btn.dataset.value); break;
       case "shopifyOrphans": setSingleFilter("shopifyOrphans"); break;
-      case "printed": setSingleFilter("printed", btn.dataset.value === "true"); break;
       case "multi": toggleMultiFilter(btn.dataset.key, btn.dataset.value); break;
       case "clear": clearMultiFilter(btn.dataset.key); break;
     }
@@ -575,7 +634,7 @@ async function deleteFilterValue(key, value) {
     api(`/api/projects/${p.id}`, { method: "PATCH", body: JSON.stringify(patchBodyFor(key, p, { remove: value })) })
   ));
   state.selected[key].delete(value);
-  if (state.selected[key].size === 0 && state.filter.type === key) state.filter = { type: "all" };
+  if (!anySelectionActive()) state.filter = { type: "all" };
   await onLibraryChanged();
 }
 
@@ -626,20 +685,12 @@ function renderGrid() {
     case "todo":
       renderTodoView(detail);
       return;
-    case "shopify":
-      title = SHOPIFY_STATUS_LABEL[state.filter.value] || "Shopify";
-      projectsForGrid = projectsMatchingShopifyStatus(state.filter.value);
+    // One or more fields (category/tag/material/creator/printed/shopify)
+    // have an active selection — combine them all with AND semantics.
+    case "filtered":
+      title = activeFilterTitle();
+      projectsForGrid = projectsMatchingAllSelected();
       break;
-    case "printed":
-      title = state.filter.value ? "Déjà imprimé" : "Non imprimé";
-      projectsForGrid = projectsMatchingPrinted(state.filter.value);
-      break;
-    case "category": case "tag": case "material": case "creator": {
-      const key = state.filter.type;
-      title = [...state.selected[key]].sort().join(" + ") || FILTER_FIELDS[key].label;
-      projectsForGrid = projectsMatchingFilter(key, state.selected[key]);
-      break;
-    }
     default:
       title = "Tous les projets";
       projectsForGrid = state.projects;
