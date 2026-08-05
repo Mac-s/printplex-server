@@ -356,6 +356,91 @@ final class ServerTests: XCTestCase {
         }
     }
 
+    /// The project detail view's main gallery needs full resolution — this
+    /// endpoint must stream the source bytes untouched, never through the
+    /// vips resize path used by `/thumbnail`.
+    func testOriginalEndpointServesExactSourceBytes() async throws {
+        try await addLibrary()
+        let projectDir = mediaDir.appendingPathComponent("Groupe/PhotoTest")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        let sourceBytes = Data("not actually a png but that's fine for this test".utf8)
+        try sourceBytes.write(to: projectDir.appendingPathComponent("photo.png"))
+        try Data(#"{"nom": "Photo Test"}"#.utf8).write(to: projectDir.appendingPathComponent("info.json"))
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var project: ProjectDTO?
+        try await app.test(.GET, "api/projects") { res async throws in
+            project = try res.content.decode([ProjectDTO].self).first { $0.name == "Photo Test" }
+        }
+        let id = try XCTUnwrap(project?.id)
+        var fileId: UUID?
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let detail = try res.content.decode(ProjectDTO.self)
+            fileId = try XCTUnwrap(detail.files).first { $0.fileName == "photo" }?.id
+        }
+        let imageId = try XCTUnwrap(fileId)
+
+        try await app.test(.GET, "api/files/\(imageId)/original", afterResponse: { res async in
+            XCTAssertEqual(res.status, .ok)
+            XCTAssertEqual(res.body.string, String(data: sourceBytes, encoding: .utf8))
+        })
+    }
+
+    /// Non-image files (a 3D model part here) have no "original photo" to
+    /// serve — `/original` is scoped to `renderImage` files only.
+    func testOriginalEndpointRejectsNonImageFiles() async throws {
+        try await addLibrary()
+        let projectDir = mediaDir.appendingPathComponent("Groupe/ModelOnly")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try Data("fake stl".utf8).write(to: projectDir.appendingPathComponent("part.stl"))
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var project: ProjectDTO?
+        try await app.test(.GET, "api/projects") { res async throws in
+            project = try res.content.decode([ProjectDTO].self).first { $0.name == "ModelOnly" }
+        }
+        let id = try XCTUnwrap(project?.id)
+        var fileId: UUID?
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let detail = try res.content.decode(ProjectDTO.self)
+            fileId = try XCTUnwrap(detail.files).first { $0.fileName == "part" }?.id
+        }
+        let modelId = try XCTUnwrap(fileId)
+
+        try await app.test(.GET, "api/files/\(modelId)/original", afterResponse: { res async in
+            XCTAssertEqual(res.status, .notFound)
+        })
+    }
+
+    /// Whether or not `vipsthumbnail` is installed on the machine running
+    /// this test, `/thumbnail` must still return the image successfully —
+    /// falling back to the original file if the resize tool is unavailable.
+    func testThumbnailForRenderImageAlwaysSucceeds() async throws {
+        try await addLibrary()
+        let projectDir = mediaDir.appendingPathComponent("Groupe/ThumbTest")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try Data("fake png bytes".utf8).write(to: projectDir.appendingPathComponent("photo.png"))
+        try Data(#"{"nom": "ThumbTest"}"#.utf8).write(to: projectDir.appendingPathComponent("info.json"))
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var project: ProjectDTO?
+        try await app.test(.GET, "api/projects") { res async throws in
+            project = try res.content.decode([ProjectDTO].self).first { $0.name == "ThumbTest" }
+        }
+        let id = try XCTUnwrap(project?.id)
+        var fileId: UUID?
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let detail = try res.content.decode(ProjectDTO.self)
+            fileId = try XCTUnwrap(detail.files).first { $0.fileName == "photo" }?.id
+        }
+        let imageId = try XCTUnwrap(fileId)
+
+        try await app.test(.GET, "api/files/\(imageId)/thumbnail", afterResponse: { res async in
+            XCTAssertEqual(res.status, .ok)
+            XCTAssertGreaterThan(res.body.readableBytes, 0)
+        })
+    }
+
     /// `category`/`creator` are plain `String?` — JSON can't distinguish
     /// "omitted" from "explicitly null" there, so an empty string is the
     /// sidebar's "Supprimer" convention for clearing the field.

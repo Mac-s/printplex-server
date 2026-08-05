@@ -29,6 +29,7 @@ struct FileController: RouteCollection {
             file.patch(use: update)
             file.get("download", use: download)
             file.get("thumbnail", use: thumbnail)
+            file.get("original", use: original)
             file.get("estimate", use: estimate)
         }
     }
@@ -107,24 +108,40 @@ struct FileController: RouteCollection {
         return response
     }
 
-    /// Render images are served as-is; 3MF files get their embedded slicer
-    /// thumbnail extracted and cached on disk (QuickLook replacement).
+    /// Render images get a small, compressed JPEG copy generated on first
+    /// request and cached on disk — used everywhere except the project
+    /// detail view's main gallery (see `original`), so browsing ~200 projects
+    /// worth of cover photos doesn't mean loading them at full resolution.
+    /// 3MF files get their embedded slicer thumbnail extracted and cached
+    /// (QuickLook replacement).
     @Sendable
     func thumbnail(req: Request) async throws -> Response {
         let file = try await find(req)
         let config = req.application.appConfig
-
-        let cachePath = config.thumbnailsPath + "/\(try file.requireID().uuidString).png"
-        if FileManager.default.fileExists(atPath: cachePath) {
-            return req.fileio.streamFile(at: cachePath)
-        }
+        let id = try file.requireID().uuidString
 
         if file.fileRole == .renderImage {
+            let cachePath = config.thumbnailsPath + "/\(id).jpg"
+            if FileManager.default.fileExists(atPath: cachePath) {
+                return req.fileio.streamFile(at: cachePath)
+            }
             let path = try MediaPath.safePath(for: file, in: config)
             guard FileManager.default.fileExists(atPath: path) else { throw Abort(.notFound) }
+            let generated = await Task.detached(priority: .utility) {
+                ImageThumbnailer.generateThumbnail(sourcePath: path, destinationPath: cachePath)
+            }.value
+            if generated, FileManager.default.fileExists(atPath: cachePath) {
+                return req.fileio.streamFile(at: cachePath)
+            }
+            // vips missing or format it can't decode — still show the image,
+            // just without the size savings.
             return req.fileio.streamFile(at: path)
         }
 
+        let cachePath = config.thumbnailsPath + "/\(id).png"
+        if FileManager.default.fileExists(atPath: cachePath) {
+            return req.fileio.streamFile(at: cachePath)
+        }
         if file.kind == .threeMF {
             let path = try MediaPath.safePath(for: file, in: config)
             let data = await Task.detached(priority: .utility) {
@@ -140,6 +157,21 @@ struct FileController: RouteCollection {
         }
 
         throw Abort(.notFound, reason: "Pas de vignette pour ce type de fichier")
+    }
+
+    /// Full-resolution image, streamed inline (no `Content-Disposition`) —
+    /// used only by the project detail view's main photo gallery.
+    @Sendable
+    func original(req: Request) async throws -> Response {
+        let file = try await find(req)
+        guard file.fileRole == .renderImage else {
+            throw Abort(.notFound, reason: "Pas une image")
+        }
+        let path = try MediaPath.safePath(for: file, in: req.application.appConfig)
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw Abort(.notFound, reason: "Fichier absent du disque")
+        }
+        return req.fileio.streamFile(at: path)
     }
 
     /// Accepts `?plateIndex=N` for multi-plate files (defaults to plate 0).

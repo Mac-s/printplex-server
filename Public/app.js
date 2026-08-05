@@ -1380,7 +1380,7 @@ function imageStripHtml(project) {
         const fname = `${f.fileName}.${f.fileExtension}`;
         const isCover = fname === cover;
         return `<div class="image-strip-item ${isCover ? "is-cover" : ""}" data-file-id="${f.id}" data-filename="${escapeHtml(fname)}">
-          <img src="/api/files/${f.id}/thumbnail" onerror="this.closest('.image-strip-item').remove()" />
+          <img src="/api/files/${f.id}/original" onerror="this.closest('.image-strip-item').remove()" />
           ${isCover ? `<div class="cover-star" title="Image principale">⭐</div>` : ""}
         </div>`;
       }).join("")}
@@ -1547,12 +1547,12 @@ function shopifySectionHtml(project) {
         ` : `<div class="empty">Non publié sur Shopify.</div>`}
       <div class="field" style="margin-top:10px">
         <label>Assignation manuelle</label>
-        <div style="display:flex; gap:8px; align-items:center">
-          <select id="shopifyManualSelect" style="flex:1">
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+          <select id="shopifyManualSelect" style="flex:1; min-width:120px">
             <option value="">Auto (par nom)</option>
             ${state.shopifyProducts.map((p) => `<option value="${p.id}" ${String(p.id) === (project.shopifyProductId || "") ? "selected" : ""}>${escapeHtml(p.title)}</option>`).join("")}
           </select>
-          <button class="btn btn-sm" id="btnCreateFromExisting">✨ Créer un produit à partir de…</button>
+          <button class="btn btn-sm" id="btnCreateFromExisting" style="white-space:nowrap; flex-shrink:0">✨ Créer un produit à partir de…</button>
         </div>
       </div>
       <button class="btn btn-sm" id="btnShopifySync" style="margin-top:8px">🔄 Resynchroniser</button>
