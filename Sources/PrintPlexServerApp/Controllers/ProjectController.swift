@@ -17,6 +17,8 @@ struct ProjectUpdateRequest: Content {
     var sourceEstimatedWeight: String?
     var sourceEstimatedPrintTime: String?
     var sourceInstructionImages: [String]?
+    var sourceScrapeStatus: String?
+    var sourceScrapeError: String?
     var shopifyProductId: String?
     var coverImageFileName: String?
 }
@@ -98,6 +100,9 @@ struct ProjectController: RouteCollection {
         if let v = body.sourceEstimatedWeight { model.sourceEstimatedWeight = v.isEmpty ? nil : v }
         if let v = body.sourceEstimatedPrintTime { model.sourceEstimatedPrintTime = v.isEmpty ? nil : v }
         if let v = body.sourceInstructionImages { model.sourceInstructionImages = v }
+        // DB-only (see ProjectDTO) — no info.json mirror below, unlike the other source_* fields.
+        if let v = body.sourceScrapeStatus { model.sourceScrapeStatus = v.isEmpty ? nil : v }
+        if let v = body.sourceScrapeError { model.sourceScrapeError = v.isEmpty ? nil : v }
         if let v = body.shopifyProductId { model.shopifyProductId = v }
         if let v = body.coverImageFileName { model.coverImageFileName = v }
         try await model.save(on: req.db)

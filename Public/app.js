@@ -645,6 +645,7 @@ function setDetailWide(isWide) {
 }
 
 function showGrid(opts = {}) {
+  stopForgeCorePolling();
   if (!opts.keepFilter) state.filter = { type: "all" };
   state.view = "grid";
   state.selectedId = null;
@@ -1129,6 +1130,7 @@ function getPersistedEstimateMaterialId() {
 }
 
 async function openProject(id) {
+  stopForgeCorePolling();
   state.selectedId = id;
   state.view = "project";
   setDetailWide(false);
@@ -1226,7 +1228,7 @@ function wireProjectDetailEvents(project) {
       return [...all].filter((v) => v.toLowerCase().includes(q) && !(project.tags || []).includes(v)).slice(0, 8);
     });
 
-  wireSourceFieldsAutosave(project);
+  wireForgeCoreSection(project);
   if (project.sourceUrl) {
     wireChipEditor("sourceHardwareChipList", project.sourceHardware || [],
       (list) => updateChipField(project, "sourceHardware", list),
@@ -1353,27 +1355,73 @@ function notesSectionHtml(project) {
 // Populated either by hand or via an external import (e.g. the ForgeCore
 // scraper's import.js) — nothing here is inferred from a scan.
 
-// Matches `sourceInstructionImages` filenames against the project's already-
-// scanned `files` list to get real FileDTOs (with ids) to render thumbnails
-// for — the info.json field only stores filenames, not file ids.
+// `source_instruction_images` entries are paths relative to the project
+// folder (e.g. "instructions/forgecore-instructions-1.webp" — the ForgeCore
+// relay/import.js organizes photos into gallery/users-gallery/instructions
+// subfolders), not bare filenames — reconstructed from the file's absolute
+// `path` so it can be compared. Falls back to the bare filename for older
+// imports that predate the subfolder convention.
+function relativeProjectPath(project, file) {
+  const prefix = `${project.folderPath}/`;
+  return file.path.startsWith(prefix) ? file.path.slice(prefix.length) : `${file.fileName}.${file.fileExtension}`;
+}
+
+// Matches `sourceInstructionImages` against the project's already-scanned
+// `files` list to get real FileDTOs (with ids) to render thumbnails for.
 function sourceInstructionImageFiles(project) {
   const names = new Set(project.sourceInstructionImages || []);
-  return (project.files || []).filter((f) => names.has(`${f.fileName}.${f.fileExtension}`));
+  return (project.files || []).filter((f) => {
+    const bare = `${f.fileName}.${f.fileExtension}`;
+    return names.has(bare) || names.has(relativeProjectPath(project, f));
+  });
+}
+
+// Shown under the URL field whenever the relay (npm run relay, on the
+// user's own machine — see forgecore-scraper/) is mid-job or last failed.
+function forgeCoreScrapeStatusHtml(project) {
+  if (project.sourceScrapeStatus === "pending") {
+    return `<p class="hint" style="margin:2px 0 12px">⏳ En attente du relais ForgeCore — lance <code>npm run relay</code> sur ta machine s'il ne tourne pas déjà.</p>`;
+  }
+  if (project.sourceScrapeStatus === "failed") {
+    return `<div class="message err" style="margin:2px 0 12px">Échec du scraping : ${escapeHtml(project.sourceScrapeError || "erreur inconnue")}</div>`;
+  }
+  return "";
 }
 
 function sourceSectionHtml(project) {
-  if (!project.sourceUrl) return "";
+  const awaitingImport = needsForgeCoreImport(project);
+  if (!project.sourceUrl && !awaitingImport) return "";
+
+  // Not imported yet, but tagged as a ForgeCore design — offer the one-click
+  // scrape trigger instead of the full (still empty) section below.
+  if (!project.sourceUrl) {
+    return `
+      <div class="section">
+        <div class="section-title">🔨 ForgeCore</div>
+        <div class="field" style="margin-bottom:6px">
+          <label>Lien vers la fiche d'origine</label>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+            <input id="detailSourceUrlInput" style="flex:1; min-width:200px" placeholder="https://prinnit.com/ForgeCore/design/…" autocomplete="off" />
+            <button class="btn btn-sm" id="btnForgeCoreScrape" style="white-space:nowrap; flex-shrink:0">🔎 Lancer le scraping</button>
+          </div>
+        </div>
+        ${forgeCoreScrapeStatusHtml(project)}
+      </div>`;
+  }
+
   const instructionFiles = sourceInstructionImageFiles(project);
   return `
     <div class="section">
       <div class="section-title">🔨 ForgeCore</div>
       <div class="field" style="margin-bottom:10px">
         <label>Lien vers la fiche d'origine</label>
-        <div style="display:flex; gap:8px; align-items:center">
-          <input id="detailSourceUrlInput" style="flex:1" value="${escapeHtml(project.sourceUrl ?? "")}" placeholder="https://…" autocomplete="off" />
-          ${project.sourceUrl ? `<a class="btn btn-sm" href="${escapeHtml(project.sourceUrl)}" target="_blank" rel="noopener">Voir</a>` : ""}
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+          <input id="detailSourceUrlInput" style="flex:1; min-width:200px" value="${escapeHtml(project.sourceUrl)}" placeholder="https://…" autocomplete="off" />
+          <a class="btn btn-sm" href="${escapeHtml(project.sourceUrl)}" target="_blank" rel="noopener">Voir</a>
+          <button class="btn btn-sm" id="btnForgeCoreScrape" style="white-space:nowrap; flex-shrink:0">🔁 Relancer le scraping</button>
         </div>
       </div>
+      ${forgeCoreScrapeStatusHtml(project)}
       <div class="detail-metadata-row">
         <div class="meta-field"><label>⚖️ Poids estimé (designer)</label><input id="detailSourceWeightInput" value="${escapeHtml(project.sourceEstimatedWeight ?? "")}" placeholder="ex. 1.16kg" autocomplete="off" /></div>
         <div class="meta-field"><label>⏱️ Temps estimé (designer)</label><input id="detailSourcePrintTimeInput" value="${escapeHtml(project.sourceEstimatedPrintTime ?? "")}" placeholder="ex. 2d 5h 44m" autocomplete="off" /></div>
@@ -1393,19 +1441,75 @@ function sourceSectionHtml(project) {
     </div>`;
 }
 
-function wireSourceFieldsAutosave(project) {
-  if (!project.sourceUrl) return;
-  const fields = [
-    ["detailSourceUrlInput", "sourceUrl"],
-    ["detailSourceWeightInput", "sourceEstimatedWeight"],
-    ["detailSourcePrintTimeInput", "sourceEstimatedPrintTime"],
-  ];
-  for (const [inputId, fieldKey] of fields) {
-    const input = document.getElementById(inputId);
-    const save = () => flushDetailSave(project.id, () => ({ [fieldKey]: input.value.trim() }));
-    input.addEventListener("input", () => scheduleDetailSave(save));
-    input.addEventListener("blur", save);
+// Pastes the URL + clicks "Lancer/Relancer le scraping": marks the project
+// pending (optimistic re-render) and PATCHes the same, for the relay running
+// on the user's own machine (forgecore-scraper/relay.js) to pick up.
+async function launchForgeCoreScrape(project, url) {
+  const trimmed = (url || "").trim();
+  if (!trimmed) { alert("Colle d'abord le lien vers la fiche ForgeCore."); return; }
+  project.sourceUrl = trimmed;
+  project.sourceScrapeStatus = "pending";
+  project.sourceScrapeError = null;
+  renderProjectDetail(project);
+  try {
+    await api(`/api/projects/${project.id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ sourceUrl: trimmed, sourceScrapeStatus: "pending", sourceScrapeError: "" }),
+    });
+    updateLocalProject(project.id, { sourceUrl: trimmed, sourceScrapeStatus: "pending" });
+  } catch (e) {
+    project.sourceScrapeStatus = "failed";
+    project.sourceScrapeError = e.message;
+    renderProjectDetail(project);
   }
+}
+
+// While a scrape is pending, poll for the relay's result (base interval —
+// this is a background job with no push channel, not a page load) and
+// re-render as soon as it lands. Cleared on navigating away (openProject/
+// showGrid) so it never outlives the detail view that started it.
+let forgeCorePollTimer = null;
+function stopForgeCorePolling() {
+  if (forgeCorePollTimer) { clearInterval(forgeCorePollTimer); forgeCorePollTimer = null; }
+}
+function startForgeCorePollingIfNeeded(project) {
+  stopForgeCorePolling();
+  if (project.sourceScrapeStatus !== "pending") return;
+  forgeCorePollTimer = setInterval(async () => {
+    if (state.selectedId !== project.id) { stopForgeCorePolling(); return; }
+    try {
+      const fresh = await api(`/api/projects/${project.id}`);
+      if (state.selectedId !== project.id) { stopForgeCorePolling(); return; }
+      updateLocalProject(project.id, fresh);
+      if (fresh.sourceScrapeStatus !== "pending") stopForgeCorePolling();
+      renderProjectDetail(fresh);
+    } catch (e) {
+      // Transient network hiccup — just try again next tick.
+    }
+  }, 4000);
+}
+
+function wireForgeCoreSection(project) {
+  const urlInput = document.getElementById("detailSourceUrlInput");
+  const scrapeBtn = document.getElementById("btnForgeCoreScrape");
+  scrapeBtn?.addEventListener("click", () => launchForgeCoreScrape(project, urlInput?.value));
+
+  // The weight/print-time fields only exist once a scrape has actually
+  // produced a full section — the pre-import minimal form has none of these.
+  if (project.sourceUrl) {
+    const fields = [
+      ["detailSourceWeightInput", "sourceEstimatedWeight"],
+      ["detailSourcePrintTimeInput", "sourceEstimatedPrintTime"],
+    ];
+    for (const [inputId, fieldKey] of fields) {
+      const input = document.getElementById(inputId);
+      const save = () => flushDetailSave(project.id, () => ({ [fieldKey]: input.value.trim() }));
+      input.addEventListener("input", () => scheduleDetailSave(save));
+      input.addEventListener("blur", save);
+    }
+  }
+
+  startForgeCorePollingIfNeeded(project);
 }
 
 // ── Image gallery strip (natural aspect ratio, cover-setting via context menu) ──
@@ -1415,9 +1519,11 @@ function imageStripHtml(project) {
   // — excluded here (shown in their own "ForgeCore" section instead) so they
   // don't get mixed into the product photo gallery or picked as the cover.
   const instructionNames = new Set(project.sourceInstructionImages || []);
-  const images = (project.files || []).filter(
-    (f) => f.fileRole === "renderImage" && !instructionNames.has(`${f.fileName}.${f.fileExtension}`)
-  );
+  const images = (project.files || []).filter((f) => {
+    if (f.fileRole !== "renderImage") return false;
+    const bare = `${f.fileName}.${f.fileExtension}`;
+    return !instructionNames.has(bare) && !instructionNames.has(relativeProjectPath(project, f));
+  });
   if (images.length === 0) return "";
   const cover = project.coverImageFileName;
   const ordered = [...images].sort((a, b) => {
@@ -1892,6 +1998,7 @@ function setSettingsButtonActive(active) {
 }
 
 async function openSettings(tab) {
+  stopForgeCorePolling();
   state.view = "settings";
   state.selectedId = null;
   setDetailWide(false);

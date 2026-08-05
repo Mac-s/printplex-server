@@ -31,6 +31,9 @@ final class ProjectModel: Model, @unchecked Sendable {
     @OptionalField(key: "source_estimated_weight") var sourceEstimatedWeight: String?
     @OptionalField(key: "source_estimated_print_time") var sourceEstimatedPrintTime: String?
     @OptionalField(key: "source_instruction_images") var sourceInstructionImages: [String]?
+    // Not touched by `apply(info:)` — deliberately DB-only, see ProjectDTO.
+    @OptionalField(key: "source_scrape_status") var sourceScrapeStatus: String?
+    @OptionalField(key: "source_scrape_error") var sourceScrapeError: String?
 
     @Children(for: \.$project) var files: [FileModel]
 
@@ -78,6 +81,8 @@ final class ProjectModel: Model, @unchecked Sendable {
             sourceEstimatedWeight: sourceEstimatedWeight,
             sourceEstimatedPrintTime: sourceEstimatedPrintTime,
             sourceInstructionImages: sourceInstructionImages ?? [],
+            sourceScrapeStatus: sourceScrapeStatus,
+            sourceScrapeError: sourceScrapeError,
             shopifyProductId: shopifyProductId,
             files: files,
             coverFileId: coverFileId,
@@ -98,6 +103,7 @@ final class ProjectModel: Model, @unchecked Sendable {
         let instructionNames = Set(sourceInstructionImages ?? [])
         let images = files.filter {
             $0.fileRoleRaw == FileRole.renderImage.rawValue
+                && !instructionNames.contains(relativePath(of: $0))
                 && !instructionNames.contains("\($0.fileName).\($0.fileExtension)")
         }
         let chosen = coverImageFileName.flatMap { name in
@@ -108,5 +114,20 @@ final class ProjectModel: Model, @unchecked Sendable {
             ?? files.first { $0.fileRoleRaw == FileRole.modelPart.rawValue }
         let partsCount = files.filter { $0.fileRoleRaw == FileRole.modelPart.rawValue }.count
         return (cover?.id, partsCount, files.count, images.count)
+    }
+
+    /// `source_instruction_images` entries from the ForgeCore relay/import.js
+    /// are paths relative to the project folder (e.g. "instructions/foo.webp",
+    /// since photos are organized into gallery/users-gallery/instructions
+    /// subfolders), not bare filenames — this reconstructs that same relative
+    /// path from a `FileModel`'s absolute `path` so the two can be compared.
+    /// Falls back to the bare filename for older imports that predate the
+    /// subfolder convention.
+    private func relativePath(of file: FileModel) -> String {
+        let prefix = folderPath + "/"
+        guard file.path.hasPrefix(prefix) else {
+            return "\(file.fileName).\(file.fileExtension)"
+        }
+        return String(file.path.dropFirst(prefix.count))
     }
 }

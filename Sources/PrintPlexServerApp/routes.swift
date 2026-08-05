@@ -19,4 +19,5 @@ func routes(_ app: Application) throws {
     try app.register(collection: MaterialController())
     try app.register(collection: SettingsController())
     try app.register(collection: LibraryController())
+    try app.register(collection: ForgeCoreController())
 }

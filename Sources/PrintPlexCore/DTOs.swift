@@ -166,6 +166,14 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
     /// the dashboard to render them in their own section — excluded from
     /// the regular photo gallery and cover-image selection.
     public var sourceInstructionImages: [String]
+    /// Set when the dashboard asks the ForgeCore relay (running on the
+    /// user's own machine, where the authenticated scraping session lives)
+    /// to scrape+import `sourceUrl` — "pending" while waiting on the relay,
+    /// "failed" (with `sourceScrapeError`) if its last attempt didn't work.
+    /// Deliberately DB-only, not part of `ProjectInfo`/info.json: this is
+    /// transient job state, not descriptive data about the design.
+    public var sourceScrapeStatus: String?
+    public var sourceScrapeError: String?
 
     /// Shopify integration — explicit product ID override (nil = auto-match by name)
     public var shopifyProductId: String?
@@ -189,6 +197,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
                 sourceUrl: String? = nil, sourceHardware: [String] = [],
                 sourceEstimatedWeight: String? = nil, sourceEstimatedPrintTime: String? = nil,
                 sourceInstructionImages: [String] = [],
+                sourceScrapeStatus: String? = nil, sourceScrapeError: String? = nil,
                 shopifyProductId: String? = nil,
                 files: [FileDTO]? = nil, coverFileId: UUID? = nil,
                 partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0) {
@@ -211,6 +220,8 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
         self.sourceEstimatedWeight = sourceEstimatedWeight
         self.sourceEstimatedPrintTime = sourceEstimatedPrintTime
         self.sourceInstructionImages = sourceInstructionImages
+        self.sourceScrapeStatus = sourceScrapeStatus
+        self.sourceScrapeError = sourceScrapeError
         self.coverFileId = coverFileId
         self.partsCount = partsCount
         self.totalFileCount = totalFileCount

@@ -356,6 +356,44 @@ final class ServerTests: XCTestCase {
         }
     }
 
+    /// `import.js` (and the ForgeCore relay) organize imported photos into
+    /// gallery/users-gallery/instructions subfolders, recording
+    /// `source_instruction_images` as paths relative to the project folder
+    /// (e.g. "instructions/foo.png") rather than bare filenames — the
+    /// exclusion above must still work against that form, not just the
+    /// older flat-file convention.
+    func testInstructionImagesExcludedWhenStoredAsSubfolderPaths() async throws {
+        try await addLibrary()
+
+        let projectDir = mediaDir.appendingPathComponent("Groupe/SubfolderTest")
+        let instructionsDir = projectDir.appendingPathComponent("instructions")
+        try FileManager.default.createDirectory(at: instructionsDir, withIntermediateDirectories: true)
+        try Data("fake png".utf8).write(to: projectDir.appendingPathComponent("photo-produit.png"))
+        try Data("fake instructions".utf8).write(to: instructionsDir.appendingPathComponent("forgecore-instructions-1.png"))
+        try Data(#"{"nom": "Subfolder Test"}"#.utf8).write(to: projectDir.appendingPathComponent("info.json"))
+
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var project: ProjectDTO?
+        try await app.test(.GET, "api/projects") { res async throws in
+            project = try res.content.decode([ProjectDTO].self).first { $0.name == "Subfolder Test" }
+        }
+        let id = try XCTUnwrap(project?.id)
+
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(sourceInstructionImages: ["instructions/forgecore-instructions-1.png"]))
+        }, afterResponse: { res async in
+            XCTAssertEqual(res.status, .ok)
+        })
+
+        try await app.test(.GET, "api/projects") { res async throws in
+            let updated = try XCTUnwrap(try res.content.decode([ProjectDTO].self).first { $0.name == "Subfolder Test" })
+            XCTAssertEqual(updated.imageCount, 1)
+            let cover = try await FileModel.find(updated.coverFileId, on: app.db)
+            XCTAssertEqual(cover?.fileName, "photo-produit")
+        }
+    }
+
     /// The project detail view's main gallery needs full resolution — this
     /// endpoint must stream the source bytes untouched, never through the
     /// vips resize path used by `/thumbnail`.
@@ -498,6 +536,136 @@ final class ServerTests: XCTestCase {
             try req.content.encode(ShopifyCreateProductRequest(title: "Casque Power Ranger Bleu"))
         }, afterResponse: { res async in
             XCTAssertEqual(res.status, .serviceUnavailable)
+        })
+    }
+
+    // MARK: - ForgeCore relay
+
+    /// Only projects the dashboard has actually marked "pending" (via the
+    /// regular PATCH endpoint, same as the manual source-URL field) should
+    /// show up for the relay to pick up.
+    func testForgeCorePendingListsOnlyProjectsAwaitingScrape() async throws {
+        try await addLibrary()
+        let dirA = mediaDir.appendingPathComponent("Groupe/PendingOne")
+        let dirB = mediaDir.appendingPathComponent("Groupe/NotPending")
+        try FileManager.default.createDirectory(at: dirA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: dirB, withIntermediateDirectories: true)
+        try Data(#"{"nom": "PendingOne"}"#.utf8).write(to: dirA.appendingPathComponent("info.json"))
+        try Data(#"{"nom": "NotPending"}"#.utf8).write(to: dirB.appendingPathComponent("info.json"))
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var pendingId: UUID?
+        try await app.test(.GET, "api/projects") { res async throws in
+            pendingId = try res.content.decode([ProjectDTO].self).first { $0.name == "PendingOne" }?.id
+        }
+        let id = try XCTUnwrap(pendingId)
+
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(
+                sourceUrl: "https://prinnit.com/ForgeCore/design/x", sourceScrapeStatus: "pending"))
+        }, afterResponse: { res async in XCTAssertEqual(res.status, .ok) })
+
+        try await app.test(.GET, "api/forgecore/pending") { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let pending = try res.content.decode([ForgeCorePendingProject].self)
+            XCTAssertEqual(pending.count, 1)
+            XCTAssertEqual(pending.first?.id, id)
+            XCTAssertEqual(pending.first?.sourceUrl, "https://prinnit.com/ForgeCore/design/x")
+        }
+    }
+
+    /// End-to-end happy path: the relay posts scraped metadata + photos,
+    /// which should land on disk, in the DB, in info.json, and clear the
+    /// pending status — with the instruction photo still excluded from the
+    /// gallery/cover the same way a manual import via import.js would be.
+    func testForgeCoreImportResultWritesPhotosAndClearsPendingStatus() async throws {
+        try await addLibrary()
+        let projectDir = mediaDir.appendingPathComponent("Groupe/RelayTest")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try Data(#"{"nom": "RelayTest"}"#.utf8).write(to: projectDir.appendingPathComponent("info.json"))
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var projectID: UUID?
+        try await app.test(.GET, "api/projects") { res async throws in
+            projectID = try res.content.decode([ProjectDTO].self).first { $0.name == "RelayTest" }?.id
+        }
+        let id = try XCTUnwrap(projectID)
+
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(
+                sourceUrl: "https://prinnit.com/ForgeCore/design/y", sourceScrapeStatus: "pending"))
+        }, afterResponse: { res async in XCTAssertEqual(res.status, .ok) })
+
+        let galleryBytes = Data("fake gallery photo".utf8)
+        let communityBytes = Data("fake community photo".utf8)
+        let instructionBytes = Data("fake instructions photo".utf8)
+        let result = ForgeCoreImportResultRequest(
+            success: true,
+            description: "Une belle description",
+            sourceHardware: ["N52 Magnet (6 x 2mm) × 8"],
+            sourceEstimatedWeight: "1.16kg",
+            sourceEstimatedPrintTime: "2d 5h 44m",
+            galleryPhotos: [ForgeCorePhotoPayload(filename: "forgecore-gallery-1.webp", dataBase64: galleryBytes.base64EncodedString())],
+            communityPhotos: [ForgeCorePhotoPayload(filename: "forgecore-communaute-1.webp", dataBase64: communityBytes.base64EncodedString())],
+            instructionPhotos: [ForgeCorePhotoPayload(filename: "forgecore-instructions-1.webp", dataBase64: instructionBytes.base64EncodedString())]
+        )
+        try await app.test(.POST, "api/projects/\(id)/forgecore-import-result", beforeRequest: { req in
+            try req.content.encode(result)
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertEqual(project.sourceHardware, ["N52 Magnet (6 x 2mm) × 8"])
+            XCTAssertEqual(project.sourceEstimatedWeight, "1.16kg")
+            XCTAssertEqual(project.sourceEstimatedPrintTime, "2d 5h 44m")
+            XCTAssertEqual(project.sourceInstructionImages, ["instructions/forgecore-instructions-1.webp"])
+            XCTAssertEqual(project.projectDescription, "Une belle description")
+            XCTAssertNil(project.sourceScrapeStatus)
+            // Gallery + community photos count; the instruction photo is excluded.
+            XCTAssertEqual(project.imageCount, 2)
+        })
+
+        XCTAssertEqual(try Data(contentsOf: projectDir.appendingPathComponent("gallery/forgecore-gallery-1.webp")), galleryBytes)
+        XCTAssertEqual(try Data(contentsOf: projectDir.appendingPathComponent("users-gallery/forgecore-communaute-1.webp")), communityBytes)
+        XCTAssertEqual(try Data(contentsOf: projectDir.appendingPathComponent("instructions/forgecore-instructions-1.webp")), instructionBytes)
+
+        try await app.test(.GET, "api/forgecore/pending") { res async throws in
+            let pending = try res.content.decode([ForgeCorePendingProject].self)
+            XCTAssertTrue(pending.isEmpty)
+        }
+
+        let infoDict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: projectDir.appendingPathComponent("info.json"))) as? [String: Any]
+        XCTAssertEqual(infoDict?["source_hardware"] as? [String], ["N52 Magnet (6 x 2mm) × 8"])
+    }
+
+    /// A failed scrape (session expired, page layout changed, network error…)
+    /// should surface as a readable error on the project, not silently vanish.
+    func testForgeCoreImportResultFailureRecordsError() async throws {
+        try await addLibrary()
+        let projectDir = mediaDir.appendingPathComponent("Groupe/RelayFail")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try Data(#"{"nom": "RelayFail"}"#.utf8).write(to: projectDir.appendingPathComponent("info.json"))
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var projectID: UUID?
+        try await app.test(.GET, "api/projects") { res async throws in
+            projectID = try res.content.decode([ProjectDTO].self).first { $0.name == "RelayFail" }?.id
+        }
+        let id = try XCTUnwrap(projectID)
+
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(
+                sourceUrl: "https://prinnit.com/ForgeCore/design/z", sourceScrapeStatus: "pending"))
+        }, afterResponse: { res async in XCTAssertEqual(res.status, .ok) })
+
+        let result = ForgeCoreImportResultRequest(success: false, error: "Session ForgeCore expirée")
+        try await app.test(.POST, "api/projects/\(id)/forgecore-import-result", beforeRequest: { req in
+            try req.content.encode(result)
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertEqual(project.sourceScrapeStatus, "failed")
+            XCTAssertEqual(project.sourceScrapeError, "Session ForgeCore expirée")
         })
     }
 }
