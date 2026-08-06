@@ -1704,6 +1704,11 @@ function shopifySectionHtml(project) {
           <div class="shopify-variant-list">
             ${product.variants.map((v) => `<span class="shopify-variant-chip">${escapeHtml(v.title)} · ${formatEur(Number(v.price))}${v.sku ? ` · ${escapeHtml(v.sku)}` : ""}</span>`).join("")}
           </div>` : ""}
+        ${product.collections.length ? `
+          <div class="shopify-variant-list">
+            ${product.collections.map((c) => `<span class="shopify-variant-chip">📁 ${escapeHtml(c.title)}</span>`).join("")}
+          </div>` : ""}
+        ${product.category ? `<div class="shopify-match-meta">🏷️ ${escapeHtml(product.category.name)}</div>` : ""}
         ${product.images.length ? `
           <div class="shopify-image-strip">
             ${product.images.slice(0, 6).map((img) => `<img src="${escapeHtml(img.src)}" alt="${escapeHtml(img.alt || "")}" loading="lazy" />`).join("")}
@@ -2564,6 +2569,17 @@ function openDuplicateProductModal(opts = {}) {
         <div id="dupVariantsList"></div>
         <button type="button" class="btn btn-sm" id="btnAddVariant" style="margin-top:6px">+ Variante</button>
       </div>
+      <div class="chip-editor" id="dupCollectionsSection" style="display:none">
+        <label>Collections</label>
+        <div id="dupCollectionsList"></div>
+        <p class="hint" style="margin:4px 0 0">Seulement les collections manuelles du modèle — les collections automatiques (règles) ne peuvent pas être assignées à la main.</p>
+      </div>
+      <div class="chip-editor" id="dupCategorySection" style="display:none">
+        <label>Catégorie Shopify &amp; métachamps associés</label>
+        <label class="dup-collection-item"><input type="checkbox" id="dupCategoryCheck" checked /> <span id="dupCategoryName"></span></label>
+        <div id="dupCategoryMetafieldsList" style="margin-top:4px"></div>
+        <p class="hint" style="margin:4px 0 0">C'est ce qui causait l'échec complet de la création de produit auparavant — chaque métachamp est maintenant appliqué séparément après coup, un échec ici n'empêche jamais la création du produit lui-même.</p>
+      </div>
       <div class="field">
         <label><input type="checkbox" id="dupGoogleCustomProductInput" /> Google : Custom product</label>
       </div>
@@ -2655,6 +2671,50 @@ function openDuplicateProductModal(opts = {}) {
   }
   renderPhotos();
 
+  const collectionsSection = overlay.querySelector("#dupCollectionsSection");
+  const collectionsList = overlay.querySelector("#dupCollectionsList");
+  function renderCollections(collections) {
+    if (!collections || collections.length === 0) {
+      collectionsSection.style.display = "none";
+      collectionsList.innerHTML = "";
+      return;
+    }
+    collectionsSection.style.display = "";
+    collectionsList.innerHTML = collections.map((c) => `
+        <label class="dup-collection-item">
+          <input type="checkbox" data-collection-id="${c.id}" data-collection-title="${escapeHtml(c.title)}" checked />
+          ${escapeHtml(c.title)}
+        </label>`).join("");
+  }
+
+  // Friendly labels for the two fields the dashboard actually cares about —
+  // anything else found in the reserved "shopify" namespace still shows up
+  // (under its raw key), just not specially named.
+  const CATEGORY_METAFIELD_LABELS = { "target-gender": "Sexe cible", "age-group": "Tranche d'âge" };
+  const categorySection = overlay.querySelector("#dupCategorySection");
+  const categoryCheck = overlay.querySelector("#dupCategoryCheck");
+  const categoryNameEl = overlay.querySelector("#dupCategoryName");
+  const categoryMetafieldsList = overlay.querySelector("#dupCategoryMetafieldsList");
+  function renderCategory(product) {
+    const category = product?.category || null;
+    const shopifyMetafields = (product?.metafields || []).filter((m) => m.namespace === "shopify");
+    if (!category && shopifyMetafields.length === 0) {
+      categorySection.style.display = "none";
+      categoryMetafieldsList.innerHTML = "";
+      return;
+    }
+    categorySection.style.display = "";
+    categoryCheck.checked = Boolean(category);
+    categoryCheck.disabled = !category;
+    categoryCheck.dataset.categoryId = category ? category.id : "";
+    categoryNameEl.textContent = category ? category.name : "(le modèle n'a pas de catégorie Shopify assignée)";
+    categoryMetafieldsList.innerHTML = shopifyMetafields.map((m) => `
+        <label class="dup-collection-item">
+          <input type="checkbox" data-mf-namespace="${escapeHtml(m.namespace)}" data-mf-key="${escapeHtml(m.key)}" data-mf-value="${escapeHtml(m.value)}" data-mf-type="${escapeHtml(m.type)}" checked />
+          ${escapeHtml(CATEGORY_METAFIELD_LABELS[m.key] || m.key)} : ${escapeHtml(m.value)}
+        </label>`).join("");
+  }
+
   templateSelect.addEventListener("change", () => {
     const product = state.shopifyProducts.find((p) => String(p.id) === templateSelect.value);
     titleInput.value = product ? product.title : "";
@@ -2668,23 +2728,32 @@ function openDuplicateProductModal(opts = {}) {
     seoTitleTouched = false;
     seoTitleInput.value = titleInput.value;
     seoDescriptionInput.value = product?.metafields?.find((m) => m.namespace === "global" && m.key === "description_tag")?.value || "";
+    // SKU deliberately left blank, unlike title/price — it's meant to
+    // uniquely identify one specific physical variant, so carrying the
+    // template's SKU over verbatim just creates a duplicate on the new
+    // product (and Shopify stores with duplicate-SKU prevention enabled
+    // reject the whole product creation over it). Left for the user to
+    // fill in themselves if this variant needs one.
     variants = product?.variants?.length
-      ? product.variants.map((v) => ({ title: v.title || "", price: v.price || "", sku: v.sku || "" }))
+      ? product.variants.map((v) => ({ title: v.title || "", price: v.price || "", sku: "" }))
       : [{ title: "", price: "", sku: "" }];
     renderVariants();
+    renderCollections(product?.collections || []);
+    renderCategory(product);
     // Google "Custom product" and photos deliberately untouched here: the
     // former always defaults to true regardless of template (see above),
     // the latter keeps coming from the current project, never the template.
     //
-    // No generic metadata copy anymore — Shopify's standardized category
-    // metafields (Couleur/Tissu/Sexe cible/Tranche d'âge, namespace
-    // "shopify") are tied to a Category assignment this tool can't set
-    // (Shopify only exposes that via GraphQL), and including them made
-    // Shopify reject the *entire* product creation with a cryptic "Owner
-    // subtype does not match the metafield definition's constraints" — not
-    // just skip those fields. Only the three fields worth the risk (SEO
-    // title/description, Google custom product) get their own dedicated,
-    // safe handling instead.
+    // Category-scoped metafields (Sexe cible/Tranche d'âge, namespace
+    // "shopify") used to be bundled into the same request as the product's
+    // *initial* creation — since they're only valid once a Category is
+    // assigned, and this tool couldn't assign one (REST doesn't expose it at
+    // all), Shopify rejected the *entire* product creation over it with a
+    // cryptic "Owner subtype does not match the metafield definition's
+    // constraints". Now handled by `renderCategory` above instead: Category
+    // assignment and its metafields go through GraphQL as separate follow-up
+    // calls after the product already exists, so a failure there costs at
+    // most the category/metafields — never the product itself.
   });
 
   overlay.querySelector("#btnCancelDup").addEventListener("click", () => overlay.remove());
@@ -2715,6 +2784,19 @@ function openDuplicateProductModal(opts = {}) {
             { namespace: "google-shopping", key: "custom_product", value: googleCustomProductInput.checked ? "true" : "false", type: "boolean" },
           ],
           imageFileIds: opts.projectImages ? [...selectedImageIds] : undefined,
+          collections: Array.from(collectionsList.querySelectorAll("input:checked")).map((cb) => ({
+            id: Number(cb.dataset.collectionId),
+            title: cb.dataset.collectionTitle,
+          })),
+          category: (categoryCheck.checked && categoryCheck.dataset.categoryId)
+            ? { id: categoryCheck.dataset.categoryId, name: categoryNameEl.textContent }
+            : undefined,
+          categoryMetafields: Array.from(categoryMetafieldsList.querySelectorAll("input:checked")).map((cb) => ({
+            namespace: cb.dataset.mfNamespace,
+            key: cb.dataset.mfKey,
+            value: cb.dataset.mfValue,
+            type: cb.dataset.mfType,
+          })),
         }),
       });
       overlay.remove();

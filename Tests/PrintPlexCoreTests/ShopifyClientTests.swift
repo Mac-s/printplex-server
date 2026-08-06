@@ -123,6 +123,8 @@ final class ShopifyClientTests: XCTestCase {
         XCTAssertEqual(product.productType, "Accessoire cosplay")
         XCTAssertEqual(product.vendor, "PrintPlex")
         XCTAssertEqual(product.metafields, []) // never present on products.json responses
+        XCTAssertEqual(product.collections, []) // same — fetched separately via fetchCollects
+        XCTAssertNil(product.category) // same — fetched separately via fetchCategory (GraphQL)
 
         XCTAssertEqual(product.variants[0].sku, "CASQUE-RG-P")
         XCTAssertEqual(product.variants[0].option1, "Petit")
@@ -218,6 +220,137 @@ final class ShopifyClientTests: XCTestCase {
         XCTAssertEqual(decoded.metafields[0].value, "true")
         XCTAssertEqual(decoded.metafields[1].value, "42")
         XCTAssertEqual(decoded.metafields[2].value, "1.5")
+    }
+
+    /// `custom_collections.json`'s real shape — `fetchCustomCollections`
+    /// is what turns this into `[ShopifyCollectionRef]`.
+    func testDecodesCustomCollectionsResponse() throws {
+        let json = """
+        {"custom_collections": [
+            {"id": 111, "title": "Casques"},
+            {"id": 222, "title": "Nouveautés"}
+        ]}
+        """
+        struct Wrapper: Codable {
+            let customCollections: [ShopifyCollectionRef]
+            enum CodingKeys: String, CodingKey { case customCollections = "custom_collections" }
+        }
+        let decoded = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.customCollections.count, 2)
+        XCTAssertEqual(decoded.customCollections[0].id, 111)
+        XCTAssertEqual(decoded.customCollections[0].title, "Casques")
+        XCTAssertEqual(decoded.customCollections[1].title, "Nouveautés")
+    }
+
+    /// `collects.json`'s real shape — `fetchCollects` turns this into the
+    /// plain `[Int]` of collection ids a product belongs to (both custom
+    /// *and* smart; filtering to custom-only happens by cross-referencing
+    /// against `fetchCustomCollections` in `fetchAllProducts`, not here).
+    func testDecodesCollectsResponse() throws {
+        let json = """
+        {"collects": [
+            {"id": 1, "product_id": 42, "collection_id": 111},
+            {"id": 2, "product_id": 42, "collection_id": 222}
+        ]}
+        """
+        struct Collect: Codable {
+            let collectionID: Int
+            enum CodingKeys: String, CodingKey { case collectionID = "collection_id" }
+        }
+        struct Wrapper: Codable { let collects: [Collect] }
+        let decoded = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.collects.map(\.collectionID), [111, 222])
+    }
+
+    /// Our own API's `ShopifyProduct.collections` must re-encode as plain
+    /// `id`/`title` (not e.g. a nested Shopify-shaped object) for the
+    /// dashboard's JS to read directly — same concern as
+    /// `testDecodedProductReEncodesWithCamelCaseKeysForOurOwnAPI`, checked
+    /// separately here since `collections` is never populated by decoding
+    /// (it's merged in by `fetchAllProducts`, so a real product would only
+    /// ever get it set via the public initializer, not from JSON).
+    func testProductCollectionsReEncodeForOurOwnAPI() throws {
+        var product = ShopifyProduct(id: 1, title: "T", status: "active", handle: "t", variants: [])
+        product.collections = [ShopifyCollectionRef(id: 111, title: "Casques")]
+
+        let reEncoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(product)) as? [String: Any]
+        let collections = reEncoded?["collections"] as? [[String: Any]]
+
+        XCTAssertEqual(collections?.first?["id"] as? Int, 111)
+        XCTAssertEqual(collections?.first?["title"] as? String, "Casques")
+    }
+
+    /// `product(id:) { category { id name } }`'s real GraphQL response shape
+    /// — `fetchCategory` is what turns this into `ShopifyCategoryRef?`.
+    func testDecodesGraphQLCategoryQueryResponse() throws {
+        let json = """
+        {"data": {"product": {"category": {
+            "id": "gid://shopify/TaxonomyCategory/sg-4-17-2-17",
+            "name": "Costumes de cosplay"
+        }}}}
+        """
+        struct ProductNode: Codable { let category: ShopifyCategoryRef? }
+        struct Data_: Codable { let product: ProductNode? }
+        struct Wrapper: Codable { let data: Data_? }
+        let decoded = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.data?.product?.category?.id, "gid://shopify/TaxonomyCategory/sg-4-17-2-17")
+        XCTAssertEqual(decoded.data?.product?.category?.name, "Costumes de cosplay")
+    }
+
+    /// No category assigned is the common case (Category is optional on
+    /// Shopify) — the query still returns `category: null`, not an absent key.
+    func testDecodesGraphQLCategoryQueryResponseWithNoCategory() throws {
+        let json = #"{"data": {"product": {"category": null}}}"#
+        struct ProductNode: Codable { let category: ShopifyCategoryRef? }
+        struct Data_: Codable { let product: ProductNode? }
+        struct Wrapper: Codable { let data: Data_? }
+        let decoded = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
+
+        XCTAssertNil(decoded.data?.product?.category)
+    }
+
+    /// `productUpdate`'s `userErrors` — how a GraphQL mutation reports a
+    /// rejected field (e.g. a stale/invalid category id) instead of an HTTP
+    /// error status. `setCategory`/`setShopifyMetafields` surface these as
+    /// `ShopifyError.graphQLError`.
+    func testDecodesProductUpdateUserErrors() throws {
+        let json = """
+        {"data": {"productUpdate": {"userErrors": [
+            {"field": ["category"], "message": "Category can't be blank"}
+        ]}}}
+        """
+        struct UserError: Codable { let field: [String]?; let message: String }
+        struct Payload: Codable { let userErrors: [UserError] }
+        struct Data_: Codable { let productUpdate: Payload? }
+        struct Wrapper: Codable { let data: Data_? }
+        let decoded = try JSONDecoder().decode(Wrapper.self, from: Data(json.utf8))
+
+        XCTAssertEqual(decoded.data?.productUpdate?.userErrors.first?.message, "Category can't be blank")
+        XCTAssertEqual(decoded.data?.productUpdate?.userErrors.first?.field, ["category"])
+    }
+
+    /// Same concern as `testProductCollectionsReEncodeForOurOwnAPI` — our own
+    /// API's `ShopifyProduct.category` must re-encode as plain `id`/`name`
+    /// for the dashboard's JS.
+    func testProductCategoryReEncodesForOurOwnAPI() throws {
+        var product = ShopifyProduct(id: 1, title: "T", status: "active", handle: "t", variants: [])
+        product.category = ShopifyCategoryRef(id: "gid://shopify/TaxonomyCategory/sg-4-17-2-17", name: "Costumes de cosplay")
+
+        let reEncoded = try JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(product)) as? [String: Any]
+        let category = reEncoded?["category"] as? [String: Any]
+
+        XCTAssertEqual(category?["id"] as? String, "gid://shopify/TaxonomyCategory/sg-4-17-2-17")
+        XCTAssertEqual(category?["name"] as? String, "Costumes de cosplay")
+    }
+
+    func testGraphQLErrorDescriptionIsReadable() {
+        let error = ShopifyError.graphQLError("Category can't be blank")
+        XCTAssertEqual(error.errorDescription, "Erreur Shopify (GraphQL) : Category can't be blank")
     }
 
     func testLowestPriceAndStatus() {

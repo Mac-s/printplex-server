@@ -70,10 +70,18 @@ actor ShopifyCache {
     /// full sync.
     func createProduct(title: String, bodyHtml: String?, vendor: String?, productType: String?,
                         tags: String?, variants: [ShopifyVariantInput], metafields: [ShopifyMetafieldInput],
-                        images: [ShopifyImageInput]) async throws -> ShopifyProduct {
+                        images: [ShopifyImageInput], collections: [ShopifyCollectionRef],
+                        category: ShopifyCategoryRef?, categoryMetafields: [ShopifyMetafieldInput]) async throws -> ShopifyProduct {
         let created = try await client.createProduct(
             title: title, bodyHtml: bodyHtml, vendor: vendor, productType: productType,
-            tags: tags, variants: variants, metafields: metafields, images: images
+            tags: tags, variants: variants, metafields: metafields, images: images,
+            collections: collections, category: category, categoryMetafields: categoryMetafields,
+            onCollectionError: { collectionId, error in
+                print("[ShopifyCache] Échec d'ajout à la collection \(collectionId) : \(error)")
+            },
+            onCategoryError: { stage, error in
+                print("[ShopifyCache] Échec (\(stage)) : \(error)")
+            }
         )
         products.append(created)
         return created

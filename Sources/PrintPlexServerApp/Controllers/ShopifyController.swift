@@ -24,6 +24,17 @@ struct ShopifyCreateProductRequest: Content {
     var variants: [ShopifyVariantInput]?
     var metafields: [ShopifyMetafieldInput]?
     var imageFileIds: [UUID]?
+    /// Custom collections to add the new product to — the dashboard sends
+    /// back whichever of the template's own `collections` the user left
+    /// checked, id+title both, so the response can echo real titles back
+    /// immediately (see `ShopifyClient.createProduct`).
+    var collections: [ShopifyCollectionRef]?
+    /// The template's assigned Category (if any) and whichever of its
+    /// `shopify`-namespace metafields (target gender, age group, ...) the
+    /// user left checked — both applied as separate, isolated follow-up
+    /// calls after the product itself exists (see `ShopifyClient.createProduct`).
+    var category: ShopifyCategoryRef?
+    var categoryMetafields: [ShopifyMetafieldInput]?
 }
 
 struct ShopifyController: RouteCollection {
@@ -55,7 +66,8 @@ struct ShopifyController: RouteCollection {
                 title: body.title, bodyHtml: body.bodyHtml, vendor: body.vendor,
                 productType: body.productType, tags: body.tags,
                 variants: body.variants ?? [], metafields: body.metafields ?? [],
-                images: images
+                images: images, collections: body.collections ?? [],
+                category: body.category, categoryMetafields: body.categoryMetafields ?? []
             )
         } catch {
             throw Self.abortify(error)

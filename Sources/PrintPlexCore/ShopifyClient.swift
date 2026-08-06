@@ -22,11 +22,25 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
     /// and merged in by `fetchAllProducts()`. Empty until then.
     public var metafields: [ShopifyMetafield]
     public let images: [ShopifyImage]
+    /// Same story as `metafields` — not part of `products.json`, populated
+    /// separately via `ShopifyClient.fetchCollects(productId:)` and merged in
+    /// by `fetchAllProducts()`. Only *custom* (manually-curated) collections:
+    /// smart/automated ones populate themselves from rules, so a product
+    /// can't be manually added to one — there'd be nothing meaningful for
+    /// product duplication to copy.
+    public var collections: [ShopifyCollectionRef]
+    /// Same story again — not part of `products.json` (REST doesn't expose
+    /// Shopify's Standard Product Taxonomy Category at all), populated
+    /// separately via `ShopifyClient.fetchCategory(productId:)`, which has
+    /// to go through GraphQL. `nil` means "no category assigned", same as
+    /// Shopify's own admin shows.
+    public var category: ShopifyCategoryRef?
 
     public init(id: Int, title: String, status: String, handle: String, variants: [ShopifyVariant],
                 bodyHtml: String? = nil, tags: String = "", productType: String? = nil,
                 vendor: String? = nil, metafields: [ShopifyMetafield] = [],
-                images: [ShopifyImage] = []) {
+                images: [ShopifyImage] = [], collections: [ShopifyCollectionRef] = [],
+                category: ShopifyCategoryRef? = nil) {
         self.id = id
         self.title = title
         self.status = status
@@ -38,6 +52,8 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
         self.vendor = vendor
         self.metafields = metafields
         self.images = images
+        self.collections = collections
+        self.category = category
     }
 
     // Shopify's own wire format (snake_case) — used *only* by the custom
@@ -52,15 +68,16 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
     // longer declares a `CodingKeys` type at all, so Swift synthesizes
     // `encode(to:)` on its own using the plain (camelCase) property names.
     private enum ShopifyWireKeys: String, CodingKey {
-        case id, title, status, handle, variants, tags, vendor, metafields, images
+        case id, title, status, handle, variants, tags, vendor, metafields, images, collections, category
         case bodyHtml = "body_html"
         case productType = "product_type"
     }
 
-    // Custom decode: `metafields` is never present when decoding a
-    // `products.json` response (it's fetched separately), and the other new
-    // fields are defensively optional in case a future `fields=` tweak omits
-    // one — same decodeIfPresent pattern as PrinterProfile in PrintEstimator.swift.
+    // Custom decode: `metafields`/`collections`/`category` are never present
+    // when decoding a `products.json` response (all fetched separately), and
+    // the other new fields are defensively optional in case a future
+    // `fields=` tweak omits one — same decodeIfPresent pattern as
+    // PrinterProfile in PrintEstimator.swift.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: ShopifyWireKeys.self)
         id = try c.decode(Int.self, forKey: .id)
@@ -74,6 +91,8 @@ public struct ShopifyProduct: Codable, Identifiable, Sendable {
         vendor = try c.decodeIfPresent(String.self, forKey: .vendor)
         metafields = try c.decodeIfPresent([ShopifyMetafield].self, forKey: .metafields) ?? []
         images = try c.decodeIfPresent([ShopifyImage].self, forKey: .images) ?? []
+        collections = try c.decodeIfPresent([ShopifyCollectionRef].self, forKey: .collections) ?? []
+        category = try c.decodeIfPresent(ShopifyCategoryRef.self, forKey: .category)
     }
 
     public var isActive: Bool { status == "active" }
@@ -254,12 +273,67 @@ public struct ShopifyMetafieldInput: Codable, Sendable, Equatable {
     }
 }
 
+/// A *custom* (manually-curated) collection — smart/automated collections
+/// aren't represented by this type at all, since a product can't be
+/// manually added to one (see `ShopifyClient.fetchCustomCollections`).
+public struct ShopifyCollectionRef: Codable, Sendable, Equatable, Identifiable {
+    public var id: Int
+    public var title: String
+
+    public init(id: Int, title: String) {
+        self.id = id
+        self.title = title
+    }
+}
+
+/// A node from Shopify's Standard Product Taxonomy (e.g. "Apparel & Accessories
+/// > Clothing > Costumes"). `id` is a taxonomy id (like
+/// "gid://shopify/TaxonomyCategory/sg-4-17-2-17" or similar) — an opaque
+/// string as far as this client is concerned, only ever round-tripped
+/// between `fetchCategory` and `setCategory`, never parsed or constructed.
+public struct ShopifyCategoryRef: Codable, Sendable, Equatable {
+    public var id: String
+    public var name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
 private struct ShopifyProductsResponse: Codable {
     let products: [ShopifyProduct]
 }
 
 private struct ShopifyMetafieldsResponse: Codable {
     let metafields: [ShopifyMetafield]
+}
+
+private struct ShopifyCustomCollectionsResponse: Codable {
+    let customCollections: [ShopifyCollectionRef]
+    enum CodingKeys: String, CodingKey { case customCollections = "custom_collections" }
+}
+
+private struct ShopifyCollectsResponse: Codable {
+    let collects: [ShopifyCollect]
+}
+
+private struct ShopifyCollect: Codable {
+    let collectionID: Int
+    enum CodingKeys: String, CodingKey { case collectionID = "collection_id" }
+}
+
+private struct ShopifyCollectCreateWrapper: Codable {
+    let collect: ShopifyCollectCreate
+}
+
+private struct ShopifyCollectCreate: Codable {
+    let productID: Int
+    let collectionID: Int
+    enum CodingKeys: String, CodingKey {
+        case productID = "product_id"
+        case collectionID = "collection_id"
+    }
 }
 
 // MARK: - Product creation (duplicate-as-template)
@@ -357,6 +431,20 @@ public struct ShopifyClient: Sendable {
             cursor = next
         } while cursor != nil
 
+        // Fetched once up-front (not per product) — collects only carry a
+        // collection *id*, this is what turns that into a name, and doubles
+        // as the "is this actually a custom collection?" filter (a collect
+        // pointing at an id absent here is a smart collection, silently
+        // excluded — see `ShopifyCollectionRef`).
+        var customCollectionsByID: [Int: String] = [:]
+        do {
+            for collection in try await fetchCustomCollections() {
+                customCollectionsByID[collection.id] = collection.title
+            }
+        } catch {
+            onMetafieldsError?(-1, error)
+        }
+
         var withMetafields: [ShopifyProduct] = []
         withMetafields.reserveCapacity(all.count)
         for var product in all {
@@ -365,6 +453,21 @@ public struct ShopifyClient: Sendable {
             } catch {
                 onMetafieldsError?(product.id, error)
                 product.metafields = []
+            }
+            do {
+                let collectionIDs = try await fetchCollects(productId: product.id)
+                product.collections = collectionIDs.compactMap { id in
+                    customCollectionsByID[id].map { ShopifyCollectionRef(id: id, title: $0) }
+                }
+            } catch {
+                onMetafieldsError?(product.id, error)
+                product.collections = []
+            }
+            do {
+                product.category = try await fetchCategory(productId: product.id)
+            } catch {
+                onMetafieldsError?(product.id, error)
+                product.category = nil
             }
             withMetafields.append(product)
         }
@@ -396,6 +499,246 @@ public struct ShopifyClient: Sendable {
         return try JSONDecoder().decode(ShopifyMetafieldsResponse.self, from: data).metafields
     }
 
+    /// Every *custom* collection in the store — smart/automated ones are
+    /// excluded at the source, by construction: they only show up via
+    /// `/smart_collections.json`, a different endpoint this never calls.
+    /// One page (up to 250) — the practical ceiling for how many manually-
+    /// curated collections a store built by one or two people tends to have.
+    public func fetchCustomCollections() async throws -> [ShopifyCollectionRef] {
+        guard credentials.isConfigured else { throw ShopifyError.notConfigured }
+
+        let url = URL(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/custom_collections.json?limit=250&fields=id,title")!
+        var request = URLRequest(url: url)
+        request.setValue(credentials.accessToken, forHTTPHeaderField: "X-Shopify-Access-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 30
+
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.portableData(for: request)
+        } catch {
+            throw ShopifyError.wrapNetworkError(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
+        guard http.statusCode == 200 else {
+            throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
+        }
+        return try JSONDecoder().decode(ShopifyCustomCollectionsResponse.self, from: data).customCollections
+    }
+
+    /// Which collections (by id — custom *and* smart) a product currently
+    /// belongs to. Collects aren't part of `products.json` at any `fields=`
+    /// setting, same story as metafields.
+    public func fetchCollects(productId: Int) async throws -> [Int] {
+        guard credentials.isConfigured else { throw ShopifyError.notConfigured }
+
+        let url = URL(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/collects.json?product_id=\(productId)&limit=250&fields=collection_id")!
+        var request = URLRequest(url: url)
+        request.setValue(credentials.accessToken, forHTTPHeaderField: "X-Shopify-Access-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 30
+
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.portableData(for: request)
+        } catch {
+            throw ShopifyError.wrapNetworkError(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
+        guard http.statusCode == 200 else {
+            throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
+        }
+        return try JSONDecoder().decode(ShopifyCollectsResponse.self, from: data).collects.map(\.collectionID)
+    }
+
+    /// Adds a product to a *custom* collection — the only kind this is even
+    /// possible for; a smart collection populates itself from its own rules.
+    public func addToCollection(productId: Int, collectionId: Int) async throws {
+        guard credentials.isConfigured else { throw ShopifyError.notConfigured }
+
+        let url = URL(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/collects.json")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(credentials.accessToken, forHTTPHeaderField: "X-Shopify-Access-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = try JSONEncoder().encode(
+            ShopifyCollectCreateWrapper(collect: .init(productID: productId, collectionID: collectionId))
+        )
+
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.portableData(for: request)
+        } catch {
+            throw ShopifyError.wrapNetworkError(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
+        guard http.statusCode == 200 || http.statusCode == 201 else {
+            throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
+        }
+    }
+
+    // MARK: - GraphQL (Category)
+    //
+    // Shopify's Standard Product Taxonomy Category has no REST representation
+    // at all, read or write — the *only* way to see or set what category a
+    // product belongs to is the Admin GraphQL API. Everything else this
+    // client does stays REST; this is the one exception, kept as small as
+    // possible: one query, one mutation, both going through `graphQL(...)`.
+
+    private struct GraphQLRequestBody<Variables: Encodable>: Encodable {
+        let query: String
+        let variables: Variables
+    }
+
+    private struct GraphQLResponseBody<ResponseData: Decodable>: Decodable {
+        let data: ResponseData?
+        let errors: [GraphQLTopLevelError]?
+    }
+
+    private struct GraphQLTopLevelError: Decodable {
+        let message: String
+    }
+
+    private struct GraphQLUserError: Decodable {
+        let field: [String]?
+        let message: String
+    }
+
+    /// POSTs one GraphQL operation and unwraps its `data`, surfacing either a
+    /// top-level `errors` entry (malformed query, wrong scope, etc.) as
+    /// `ShopifyError.graphQLError` — mutation-specific `userErrors` (e.g. an
+    /// invalid category id) aren't caught here, since those live *inside*
+    /// `data` in a shape specific to each mutation; callers check those
+    /// themselves (see `setCategory`/`setShopifyMetafields`).
+    private func graphQL<Variables: Encodable, ResponseData: Decodable>(
+        query: String, variables: Variables, responseType: ResponseData.Type
+    ) async throws -> ResponseData {
+        guard credentials.isConfigured else { throw ShopifyError.notConfigured }
+
+        let url = URL(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/graphql.json")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue(credentials.accessToken, forHTTPHeaderField: "X-Shopify-Access-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        request.httpBody = try JSONEncoder().encode(GraphQLRequestBody(query: query, variables: variables))
+
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.portableData(for: request)
+        } catch {
+            throw ShopifyError.wrapNetworkError(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
+        guard http.statusCode == 200 else {
+            throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
+        }
+
+        let decoded = try JSONDecoder().decode(GraphQLResponseBody<ResponseData>.self, from: data)
+        if let errors = decoded.errors, !errors.isEmpty {
+            throw ShopifyError.graphQLError(errors.map(\.message).joined(separator: " ; "))
+        }
+        guard let responseData = decoded.data else { throw ShopifyError.invalidResponse }
+        return responseData
+    }
+
+    private struct ProductCategoryQuery: Decodable {
+        struct ProductNode: Decodable {
+            let category: ShopifyCategoryRef?
+        }
+        let product: ProductNode?
+    }
+
+    /// The template product's assigned Category, if any — `nil` if it has
+    /// none (perfectly normal; category assignment is optional on Shopify).
+    public func fetchCategory(productId: Int) async throws -> ShopifyCategoryRef? {
+        struct Variables: Encodable { let id: String }
+        let query = """
+        query($id: ID!) {
+          product(id: $id) {
+            category { id name }
+          }
+        }
+        """
+        let result = try await graphQL(
+            query: query,
+            variables: Variables(id: "gid://shopify/Product/\(productId)"),
+            responseType: ProductCategoryQuery.self
+        )
+        return result.product?.category
+    }
+
+    private struct ProductUpdatePayload: Decodable {
+        let productUpdate: Payload?
+        struct Payload: Decodable { let userErrors: [GraphQLUserError] }
+    }
+
+    /// Assigns a Category to a product — always a *separate* call from
+    /// creating the product (REST) or setting its other metafields, so a
+    /// rejected category (a stale id, a category Shopify has since retired)
+    /// only ever costs the category itself, never the product or its other
+    /// data. `userErrors` (e.g. "Category can't be blank" for a bad id) are
+    /// GraphQL's own per-field validation, distinct from a transport-level
+    /// failure — surfaced the same way, since either one means "the category
+    /// didn't get set."
+    public func setCategory(productId: Int, categoryId: String) async throws {
+        struct Variables: Encodable {
+            struct Input: Encodable { let id: String; let category: String }
+            let input: Input
+        }
+        let mutation = """
+        mutation($input: ProductInput!) {
+          productUpdate(input: $input) {
+            userErrors { field message }
+          }
+        }
+        """
+        let result = try await graphQL(
+            query: mutation,
+            variables: Variables(input: .init(id: "gid://shopify/Product/\(productId)", category: categoryId)),
+            responseType: ProductUpdatePayload.self
+        )
+        if let errors = result.productUpdate?.userErrors, !errors.isEmpty {
+            throw ShopifyError.graphQLError(errors.map(\.message).joined(separator: " ; "))
+        }
+    }
+
+    /// Sets metafields in Shopify's reserved `shopify` namespace (target
+    /// gender, age group, and anything else category-scoped the template
+    /// had) — kept as its own call, made only *after* `setCategory` already
+    /// succeeded, since these fields are only valid once a category backs
+    /// them; bundling them into the same request as category assignment (or
+    /// worse, the product's initial creation) is exactly what caused every
+    /// one of these fields to make the *entire* product creation fail with a
+    /// cryptic "Owner subtype does not match the metafield definition's
+    /// constraints" before this was pulled out into its own isolated step.
+    public func setShopifyMetafields(productId: Int, metafields: [ShopifyMetafieldInput]) async throws {
+        guard !metafields.isEmpty else { return }
+        struct Variables: Encodable {
+            struct Input: Encodable { let id: String; let metafields: [MetafieldInput] }
+            struct MetafieldInput: Encodable { let namespace: String; let key: String; let value: String; let type: String }
+            let input: Input
+        }
+        let mutation = """
+        mutation($input: ProductInput!) {
+          productUpdate(input: $input) {
+            userErrors { field message }
+          }
+        }
+        """
+        let input = Variables.Input(
+            id: "gid://shopify/Product/\(productId)",
+            metafields: metafields.map { .init(namespace: $0.namespace, key: $0.key, value: $0.value, type: $0.type) }
+        )
+        let result = try await graphQL(
+            query: mutation, variables: Variables(input: input), responseType: ProductUpdatePayload.self
+        )
+        if let errors = result.productUpdate?.userErrors, !errors.isEmpty {
+            throw ShopifyError.graphQLError(errors.map(\.message).joined(separator: " ; "))
+        }
+    }
+
     /// Creates a new Shopify product from explicit field values — the caller
     /// (the web dashboard's "Dupliquer un produit" form) is responsible for
     /// pre-filling those from an existing product if it wants a duplicate;
@@ -405,6 +748,15 @@ public struct ShopifyClient: Sendable {
     /// review and publish it from Shopify's own admin once it looks right.
     /// Requires the `write_products` Admin API scope (this client only needed
     /// `read_products` before now).
+    ///
+    /// `collections` are applied *after* the product itself is created, one
+    /// `addToCollection` call each — a failure partway through (a stale id,
+    /// a transient error) doesn't undo or fail the product creation, it's
+    /// just reported via `onCollectionError` the same way a metafields fetch
+    /// failure is during sync, and the rest are still attempted. Takes
+    /// `ShopifyCollectionRef` rather than bare ids so the returned product
+    /// can echo back real titles immediately, without waiting on the next
+    /// full sync to look them up.
     public func createProduct(
         title: String,
         bodyHtml: String? = nil,
@@ -413,7 +765,12 @@ public struct ShopifyClient: Sendable {
         tags: String? = nil,
         variants: [ShopifyVariantInput] = [],
         metafields: [ShopifyMetafieldInput] = [],
-        images: [ShopifyImageInput] = []
+        images: [ShopifyImageInput] = [],
+        collections: [ShopifyCollectionRef] = [],
+        category: ShopifyCategoryRef? = nil,
+        categoryMetafields: [ShopifyMetafieldInput] = [],
+        onCollectionError: (@Sendable (_ collectionId: Int, _ error: Error) -> Void)? = nil,
+        onCategoryError: (@Sendable (_ stage: String, _ error: Error) -> Void)? = nil
     ) async throws -> ShopifyProduct {
         guard credentials.isConfigured else { throw ShopifyError.notConfigured }
 
@@ -459,7 +816,38 @@ public struct ShopifyClient: Sendable {
             throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
         }
 
-        return try JSONDecoder().decode(ShopifyProductCreateResponse.self, from: data).product
+        var created = try JSONDecoder().decode(ShopifyProductCreateResponse.self, from: data).product
+
+        var attached: [ShopifyCollectionRef] = []
+        for collection in collections {
+            do {
+                try await addToCollection(productId: created.id, collectionId: collection.id)
+                attached.append(collection)
+            } catch {
+                onCollectionError?(collection.id, error)
+            }
+        }
+        created.collections = attached
+
+        // Category, then (only if that actually succeeded) its metafields —
+        // never bundled with each other or with the product creation above.
+        // See `setShopifyMetafields` for why that isolation matters.
+        if let category {
+            do {
+                try await setCategory(productId: created.id, categoryId: category.id)
+                created.category = category
+                if !categoryMetafields.isEmpty {
+                    do {
+                        try await setShopifyMetafields(productId: created.id, metafields: categoryMetafields)
+                    } catch {
+                        onCategoryError?("category metafields", error)
+                    }
+                }
+            } catch {
+                onCategoryError?("category", error)
+            }
+        }
+        return created
     }
 
     // MARK: - Matching
@@ -550,6 +938,11 @@ public enum ShopifyError: LocalizedError {
     /// `Error`) to stay `Sendable`; the message is computed once at the
     /// throw site where the concrete error type is still known.
     case networkError(String)
+    /// A GraphQL call got a normal 200 OK, but the response's own `errors`
+    /// array (query-level) or a mutation payload's `userErrors` (e.g.
+    /// `productUpdate`) reported a problem — GraphQL doesn't use HTTP status
+    /// codes for this the way REST does.
+    case graphQLError(String)
 
     public var errorDescription: String? {
         switch self {
@@ -559,6 +952,8 @@ public enum ShopifyError: LocalizedError {
             return "Réponse Shopify invalide"
         case .networkError(let detail):
             return "Erreur réseau vers Shopify : \(detail)"
+        case .graphQLError(let detail):
+            return "Erreur Shopify (GraphQL) : \(detail)"
         case .httpError(let status, let detail):
             // A bare status code alone actively misled here: 401/403/404 really
             // are a credentials/URL problem, but 422 means Shopify *understood*
