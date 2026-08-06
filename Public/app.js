@@ -130,6 +130,13 @@ async function api(path, options = {}) {
   if (!res.ok) {
     let reason = res.statusText;
     try { reason = (await res.json()).reason ?? reason; } catch (_) {}
+    // A stale/expired session (server restarted — sessions are in-memory —
+    // or logged out elsewhere) shows up as a 401 on some *other* call, not
+    // on /api/auth/* itself. Re-prompt for login rather than leaving the
+    // dashboard silently broken.
+    if (res.status === 401 && !path.startsWith("/api/auth/")) {
+      handleSessionExpired();
+    }
     const err = new Error(reason);
     err.status = res.status;
     throw err;
@@ -2003,6 +2010,7 @@ const SETTINGS_TABS = [
   { id: "library", label: "Bibliothèque" },
   { id: "hardware", label: "Matériel" },
   { id: "shopify", label: "Shopify" },
+  { id: "account", label: "Compte" },
   { id: "about", label: "À propos" },
 ];
 
@@ -2052,6 +2060,7 @@ function renderSettings(overview) {
     case "library": body.innerHTML = renderLibraryTabHtml(overview); wireLibraryTab(overview); break;
     case "hardware": body.innerHTML = renderHardwareTabHtml(); wireHardwareTab(); break;
     case "shopify": body.innerHTML = renderShopifyTabHtml(overview); wireShopifyTab(overview); break;
+    case "account": body.innerHTML = renderAccountTabHtml(); wireAccountTab(); break;
     case "about": body.innerHTML = renderAboutTabHtml(overview); break;
   }
 }
@@ -2814,6 +2823,90 @@ function openDuplicateProductModal(opts = {}) {
 
 // ── À propos tab ──
 
+// ── Compte tab ──
+
+function renderAccountTabHtml() {
+  return `
+    <div class="section">
+      <div class="section-title">Mot de passe</div>
+      <div class="form-grid">
+        <div class="field" style="grid-column:1/-1"><label>Mot de passe actuel</label><input type="password" id="acctCurrentPassword" autocomplete="current-password" /></div>
+        <div class="field" style="grid-column:1/-1"><label>Nouveau mot de passe (8 caractères minimum)</label><input type="password" id="acctNewPassword" autocomplete="new-password" /></div>
+      </div>
+      <button class="btn btn-primary btn-sm" id="btnChangePassword" style="margin-top:8px">Changer le mot de passe</button>
+      <div id="acctPasswordMessage"></div>
+    </div>
+    <div class="section">
+      <div class="section-title">Clé d'API</div>
+      <p class="hint">Pour connecter d'autres services (relais ForgeCore, app native…) sans mot de passe — à envoyer dans l'en-tête <code>X-API-Key</code>.</p>
+      <div class="setting-row">
+        <div><div class="label">Clé actuelle</div></div>
+        <span class="value" id="acctApiKeyValue">Chargement…</span>
+      </div>
+      <div style="display:flex; gap:8px">
+        <button class="btn btn-sm" id="btnCopyApiKey">Copier</button>
+        <button class="btn btn-sm" id="btnRegenerateApiKey">Régénérer</button>
+      </div>
+      <div id="acctApiKeyMessage"></div>
+    </div>
+    <div class="section">
+      <button class="btn btn-sm" id="btnLogout">Se déconnecter</button>
+    </div>
+  `;
+}
+
+function wireAccountTab() {
+  const currentPasswordInput = document.getElementById("acctCurrentPassword");
+  const newPasswordInput = document.getElementById("acctNewPassword");
+  const passwordMessage = document.getElementById("acctPasswordMessage");
+  document.getElementById("btnChangePassword").addEventListener("click", async () => {
+    passwordMessage.innerHTML = "";
+    try {
+      await api("/api/auth/change-password", {
+        method: "POST",
+        body: JSON.stringify({ currentPassword: currentPasswordInput.value, newPassword: newPasswordInput.value }),
+      });
+      currentPasswordInput.value = "";
+      newPasswordInput.value = "";
+      passwordMessage.innerHTML = `<div class="message ok">Mot de passe changé.</div>`;
+    } catch (e) {
+      passwordMessage.innerHTML = `<div class="message err">${escapeHtml(e.message)}</div>`;
+    }
+  });
+
+  const apiKeyValue = document.getElementById("acctApiKeyValue");
+  const apiKeyMessage = document.getElementById("acctApiKeyMessage");
+  api("/api/auth/api-key").then((res) => {
+    apiKeyValue.textContent = res.apiKey;
+  }).catch((e) => {
+    apiKeyValue.textContent = "—";
+    apiKeyMessage.innerHTML = `<div class="message err">${escapeHtml(e.message)}</div>`;
+  });
+
+  document.getElementById("btnCopyApiKey").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(apiKeyValue.textContent);
+      apiKeyMessage.innerHTML = `<div class="message ok">Copiée dans le presse-papiers.</div>`;
+    } catch (_) {
+      apiKeyMessage.innerHTML = `<div class="message err">Impossible de copier automatiquement — sélectionne la clé manuellement.</div>`;
+    }
+  });
+  document.getElementById("btnRegenerateApiKey").addEventListener("click", async () => {
+    if (!confirm("Régénérer la clé d'API ? Tous les services qui utilisent l'ancienne clé cesseront de fonctionner tant qu'ils n'auront pas la nouvelle.")) return;
+    try {
+      const res = await api("/api/auth/api-key/regenerate", { method: "POST" });
+      apiKeyValue.textContent = res.apiKey;
+      apiKeyMessage.innerHTML = `<div class="message ok">Nouvelle clé générée.</div>`;
+    } catch (e) {
+      apiKeyMessage.innerHTML = `<div class="message err">${escapeHtml(e.message)}</div>`;
+    }
+  });
+  document.getElementById("btnLogout").addEventListener("click", async () => {
+    await api("/api/auth/logout", { method: "POST" });
+    location.reload();
+  });
+}
+
 function renderAboutTabHtml(overview) {
   return `
     <div class="section">
@@ -2821,6 +2914,75 @@ function renderAboutTabHtml(overview) {
       <div class="setting-row"><div class="label">Répertoire média</div><span class="value">${escapeHtml(overview.mediaPath)}</span></div>
     </div>
   `;
+}
+
+// ───────────────────────── Auth ─────────────────────────
+
+/// A full-page login (or, on first boot, account-creation) form — blocks
+/// everything else since `AuthMiddleware` rejects every `/api/*` call until
+/// this succeeds. Reuses the existing `.modal-overlay`/`.modal` styling.
+function showAuthOverlay(setupRequired, onSuccess) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal">
+      <h2>${setupRequired ? "🔐 Créer le compte administrateur" : "🔐 Connexion"}</h2>
+      ${setupRequired ? `<p class="hint" style="margin-bottom:10px">Premier démarrage — choisis un identifiant et un mot de passe pour protéger ce serveur.</p>` : ""}
+      <div class="field" style="margin-bottom:10px">
+        <label>Identifiant</label>
+        <input id="authUsername" autocomplete="username" />
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <label>Mot de passe${setupRequired ? " (8 caractères minimum)" : ""}</label>
+        <input id="authPassword" type="password" autocomplete="${setupRequired ? "new-password" : "current-password"}" />
+      </div>
+      <div id="authMessage"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" id="btnAuthSubmit">${setupRequired ? "Créer le compte" : "Se connecter"}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const userInput = overlay.querySelector("#authUsername");
+  const passInput = overlay.querySelector("#authPassword");
+  const message = overlay.querySelector("#authMessage");
+  const submitBtn = overlay.querySelector("#btnAuthSubmit");
+
+  async function submit() {
+    const username = userInput.value.trim();
+    const password = passInput.value;
+    if (!username || !password) {
+      message.innerHTML = `<div class="message err">Identifiant et mot de passe requis.</div>`;
+      return;
+    }
+    submitBtn.disabled = true;
+    message.innerHTML = "";
+    try {
+      await api(setupRequired ? "/api/auth/setup" : "/api/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ username, password }),
+      });
+      overlay.remove();
+      onSuccess();
+    } catch (e) {
+      message.innerHTML = `<div class="message err">${escapeHtml(e.message)}</div>`;
+      submitBtn.disabled = false;
+    }
+  }
+
+  submitBtn.addEventListener("click", submit);
+  passInput.addEventListener("keydown", (evt) => { if (evt.key === "Enter") submit(); });
+  userInput.addEventListener("keydown", (evt) => { if (evt.key === "Enter") passInput.focus(); });
+  userInput.focus();
+}
+
+let sessionExpiredHandled = false;
+function handleSessionExpired() {
+  if (sessionExpiredHandled) return;
+  sessionExpiredHandled = true;
+  // Simplest safe recovery: re-prompt, then reload rather than trying to
+  // resume whatever half-finished render triggered the 401.
+  showAuthOverlay(false, () => location.reload());
 }
 
 // ───────────────────────── Boot ─────────────────────────
@@ -2842,4 +3004,13 @@ async function boot() {
   setInterval(refreshStatus, 10000);
 }
 
-boot().catch((e) => console.error("Boot failed", e));
+async function bootWithAuth() {
+  const status = await api("/api/auth/status");
+  if (status.authenticated) {
+    await boot();
+  } else {
+    showAuthOverlay(status.setupRequired, () => boot().catch((e) => console.error("Boot failed", e)));
+  }
+}
+
+bootWithAuth().catch((e) => console.error("Boot failed", e));

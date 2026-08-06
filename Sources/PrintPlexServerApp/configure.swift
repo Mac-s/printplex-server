@@ -40,6 +40,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddSourceInfoToProjects())
     app.migrations.add(AddScrapeStatusToProjects())
     app.migrations.add(AddLocalMediaPathToSettings())
+    app.migrations.add(AddAuthToSettings())
     try await app.autoMigrate()
 
     try await seedReferenceDataIfNeeded(app)
@@ -48,6 +49,7 @@ func configure(_ app: Application) async throws {
     // Seeds the settings row from env vars on first boot; on later boots the
     // DB values (editable from the web Settings menu) take over.
     try await app.scanService.bootstrapSettings()
+    try await AuthController.seedFromEnvironmentIfNeeded(app)
 
     if let settingsRow = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: app.db) {
         let credentials = ShopifyCredentials(storeDomain: settingsRow.shopifyStoreDomain ?? "",
@@ -78,7 +80,13 @@ func configure(_ app: Application) async throws {
         app.http.server.configuration.port = port
     }
 
+    // In-memory session store: fine for a single-instance personal server —
+    // the only cost is everyone being logged out on a restart, which is a
+    // reasonable trade for not needing a sessions table.
+    app.sessions.use(.memory)
+    app.middleware.use(app.sessions.middleware)
     app.middleware.use(NoStoreAPIMiddleware())
+    app.middleware.use(AuthMiddleware())
 
     // Serves Public/ — the vanilla-JS test dashboard — with index.html at "/".
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory, defaultFile: "index.html"))

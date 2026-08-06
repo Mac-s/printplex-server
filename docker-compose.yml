@@ -31,6 +31,13 @@ services:
       # Optionnel — intégration Shopify :
       SHOPIFY_STORE_DOMAIN: ${SHOPIFY_STORE_DOMAIN:-}
       SHOPIFY_ACCESS_TOKEN: ${SHOPIFY_ACCESS_TOKEN:-}
+      # Compte administrateur du tableau de bord web — n'est utilisé que
+      # tant qu'aucun compte n'existe encore (premier démarrage) ; ensuite
+      # c'est éditable depuis Réglages → Compte et ces variables n'ont plus
+      # d'effet. Si tu ne les fournis pas, la première visite du tableau de
+      # bord propose de créer le compte directement dans l'interface.
+      PRINTPLEX_ADMIN_USERNAME: ${PRINTPLEX_ADMIN_USERNAME:-}
+      PRINTPLEX_ADMIN_PASSWORD: ${PRINTPLEX_ADMIN_PASSWORD:-}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s

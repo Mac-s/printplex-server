@@ -40,6 +40,8 @@ marche identiquement en local et dans Docker. Permet de :
     matériaux (prix par kg éditable, catalogue fixe — comme dans l'app).
   - *Shopify* : domaine + token (persistés en base, plus seulement des variables d'environnement),
     synchronisation, compteur de produits.
+  - *Compte* : changer le mot de passe administrateur, et consulter/régénérer la clé d'API (voir
+    "Authentification" plus bas).
   - *À propos* : version du serveur, chemin de la bibliothèque.
 
 Les imprimantes/matériaux, autrefois figés dans `PrinterProfile.defaults`/`PrintMaterial.defaults`,
@@ -292,6 +294,23 @@ gardant tout sauf le titre et la description propre à la couleur. Toujours cré
 jusqu'ici) : Shopify Admin → Paramètres → Apps → développer l'app → Configuration → cocher
 `write_products` → Enregistrer.
 
+### Authentification
+
+Tout `/api/*` (sauf `/api/auth/*` lui-même) exige d'être connecté — soit via une session de
+navigateur (le tableau de bord web propose de créer le compte administrateur au tout premier
+démarrage, puis un simple formulaire de connexion ensuite), soit via une clé d'API envoyée dans
+l'en-tête `X-API-Key`, pour les services qui ne peuvent pas faire un login navigateur : le relais
+ForgeCore (`forgecore-scraper/relay.js`) et l'app native (macOS/iOS) — les deux ont besoin qu'on leur
+colle cette clé dans leur propre config (voir leurs README/Réglages respectifs). La clé se
+consulte/régénère depuis Réglages → Compte, une fois connecté.
+
+Le compte administrateur est unique (pas de multi-utilisateur) et peut être seedé au tout premier
+démarrage via `PRINTPLEX_ADMIN_USERNAME`/`PRINTPLEX_ADMIN_PASSWORD` (utile pour un déploiement
+scripté) — au-delà du tout premier démarrage ces variables n'ont plus d'effet, le compte est
+entièrement piloté depuis Réglages → Compte. Les sessions sont en mémoire (pas de table dédiée) :
+un redémarrage du conteneur déconnecte tout le monde, sans conséquence au-delà de devoir se
+reconnecter.
+
 ### Variables d'environnement
 
 `PRINTPLEX_MEDIA_PATH` (point de montage générique — les bibliothèques elles-mêmes se configurent
@@ -299,7 +318,8 @@ depuis Réglages, pas par variable d'environnement), `PRINTPLEX_DATA_PATH` (SQLi
 `PRINTPLEX_SCAN_INTERVAL_MIN` (valeur de seed initiale uniquement — éditable ensuite depuis
 Réglages), `PRINTPLEX_HOSTNAME`, `PRINTPLEX_PORT`,
 `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_ACCESS_TOKEN` (seed initial, éditable ensuite depuis Réglages),
-`PRINTPLEX_DB_IN_MEMORY` (tests).
+`PRINTPLEX_ADMIN_USERNAME`, `PRINTPLEX_ADMIN_PASSWORD` (seed du tout premier démarrage uniquement —
+voir "Authentification" ci-dessus), `PRINTPLEX_DB_IN_MEMORY` (tests).
 
 ### Lancer
 
@@ -348,6 +368,11 @@ services:
       # ces variables ne servent qu'à préremplir la toute première configuration :
       SHOPIFY_STORE_DOMAIN: ${SHOPIFY_STORE_DOMAIN:-}
       SHOPIFY_ACCESS_TOKEN: ${SHOPIFY_ACCESS_TOKEN:-}
+      # Optionnel — compte administrateur du tableau de bord, ne sert qu'au
+      # tout premier démarrage (voir "Authentification" plus haut) ; sans ça,
+      # la première visite du tableau de bord propose de créer le compte :
+      PRINTPLEX_ADMIN_USERNAME: ${PRINTPLEX_ADMIN_USERNAME:-}
+      PRINTPLEX_ADMIN_PASSWORD: ${PRINTPLEX_ADMIN_PASSWORD:-}
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
       interval: 30s

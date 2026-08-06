@@ -11,6 +11,7 @@ func routes(_ app: Application) throws {
         HealthResponse(status: "ok", mediaPath: req.application.appConfig.mediaPath)
     }
 
+    try app.register(collection: AuthController())
     try app.register(collection: ProjectController())
     try app.register(collection: FileController())
     try app.register(collection: ScanController())

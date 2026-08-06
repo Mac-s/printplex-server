@@ -21,6 +21,17 @@ final class AppSettingsModel: Model, @unchecked Sendable {
     /// project's container path into one that means something on their own
     /// machine (see ProjectController's `localFolderPath`).
     @OptionalField(key: "local_media_path") var localMediaPath: String?
+    /// The single admin account for the web dashboard — nil means no account
+    /// exists yet (`AuthController`'s one-time `/api/auth/setup` route stays
+    /// open until this is set). `adminPasswordHash` is a Bcrypt hash, never
+    /// the plaintext password.
+    @OptionalField(key: "admin_username") var adminUsername: String?
+    @OptionalField(key: "admin_password_hash") var adminPasswordHash: String?
+    /// Lets other services (the ForgeCore relay, the native client) call the
+    /// API without a browser session — sent as the `X-API-Key` header. Shown
+    /// in plaintext in Réglages once logged in, same trust model as the
+    /// Shopify access token above.
+    @OptionalField(key: "api_key") var apiKey: String?
 
     init() {}
 
