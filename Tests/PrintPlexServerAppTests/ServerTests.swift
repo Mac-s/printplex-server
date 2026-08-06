@@ -507,6 +507,41 @@ final class ServerTests: XCTestCase {
         XCTAssertNil(dict?["categorie"])
     }
 
+    /// The container never knows its own bind-mount source — `localFolderPath`
+    /// only appears once the user tells the dashboard via Réglages, and is
+    /// `folderPath` with the container's media root swapped for that value.
+    func testLocalFolderPathReflectsConfiguredLocalMediaPath() async throws {
+        try await addLibrary()
+        try await app.test(.POST, "api/scan?wait=true")
+
+        // Nothing configured yet — absent on both list and detail.
+        var projectID: UUID?
+        try await app.test(.GET, "api/projects") { res async throws in
+            let project = try res.content.decode([ProjectDTO].self).first
+            projectID = project?.id
+            XCTAssertNil(project?.localFolderPath)
+        }
+        let id = try XCTUnwrap(projectID)
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertNil(project.localFolderPath)
+        }
+
+        try await app.test(.PATCH, "api/settings/local-path", beforeRequest: { req in
+            try req.content.encode(LocalPathSettingsUpdateRequest(localMediaPath: "/Volumes/NAS/PrintPlex"))
+        }, afterResponse: { res async in XCTAssertEqual(res.status, .ok) })
+
+        let expected = "/Volumes/NAS/PrintPlex/Groupe/Cube"
+        try await app.test(.GET, "api/projects") { res async throws in
+            let project = try res.content.decode([ProjectDTO].self).first
+            XCTAssertEqual(project?.localFolderPath, expected)
+        }
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertEqual(project.localFolderPath, expected)
+        }
+    }
+
     func testScanStatusEndpoint() async throws {
         try await app.test(.GET, "api/scan/status") { res async throws in
             XCTAssertEqual(res.status, .ok)

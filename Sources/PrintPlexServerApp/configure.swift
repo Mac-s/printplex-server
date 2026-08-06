@@ -39,6 +39,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddAlreadyPrintedToProjects())
     app.migrations.add(AddSourceInfoToProjects())
     app.migrations.add(AddScrapeStatusToProjects())
+    app.migrations.add(AddLocalMediaPathToSettings())
     try await app.autoMigrate()
 
     try await seedReferenceDataIfNeeded(app)

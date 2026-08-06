@@ -141,6 +141,10 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
     public var id: UUID
     public var name: String
     public var folderPath: String
+    /// `folderPath` with the container's media root swapped for the host
+    /// path the user entered in Réglages ("Chemin local") — nil until
+    /// that's configured, since the container has no way to know it itself.
+    public var localFolderPath: String?
     public var lastModifiedAt: Date
     public var dateAdded: Date
     public var coverImageFileName: String?
@@ -188,7 +192,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
     public var totalFileCount: Int
     public var imageCount: Int
 
-    public init(id: UUID = UUID(), name: String, folderPath: String,
+    public init(id: UUID = UUID(), name: String, folderPath: String, localFolderPath: String? = nil,
                 lastModifiedAt: Date = Date(), dateAdded: Date = Date(),
                 coverImageFileName: String? = nil, projectDescription: String? = nil,
                 category: String? = nil, creator: String? = nil, tags: [String] = [],
@@ -204,6 +208,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
         self.id = id
         self.name = name
         self.folderPath = folderPath
+        self.localFolderPath = localFolderPath
         self.lastModifiedAt = lastModifiedAt
         self.dateAdded = dateAdded
         self.coverImageFileName = coverImageFileName

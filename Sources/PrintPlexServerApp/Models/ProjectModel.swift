@@ -60,11 +60,13 @@ final class ProjectModel: Model, @unchecked Sendable {
     }
 
     func toDTO(files: [FileDTO]? = nil, coverFileId: UUID? = nil,
-               partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0) -> ProjectDTO {
+               partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0,
+               localFolderPath: String? = nil) -> ProjectDTO {
         ProjectDTO(
             id: id ?? UUID(),
             name: name,
             folderPath: folderPath,
+            localFolderPath: localFolderPath,
             lastModifiedAt: lastModifiedAt,
             dateAdded: dateAdded,
             coverImageFileName: coverImageFileName,
@@ -114,6 +116,21 @@ final class ProjectModel: Model, @unchecked Sendable {
             ?? files.first { $0.fileRoleRaw == FileRole.modelPart.rawValue }
         let partsCount = files.filter { $0.fileRoleRaw == FileRole.modelPart.rawValue }.count
         return (cover?.id, partsCount, files.count, images.count)
+    }
+
+    /// Swaps the container's media root prefix (e.g. "/media") for the host
+    /// path the user entered in Réglages ("Chemin local"), so `folderPath`
+    /// (only ever meaningful inside the container) becomes something they
+    /// can actually open/copy on their own machine. Nil whenever that
+    /// setting is empty, or `folderPath` doesn't start with `mediaPath` —
+    /// silently returning the raw container path here would be worse than
+    /// just not offering a local path at all.
+    func localFolderPath(mediaPath: String, localMediaPath: String?) -> String? {
+        guard let localMediaPath, !localMediaPath.isEmpty else { return nil }
+        guard folderPath.hasPrefix(mediaPath) else { return nil }
+        let suffix = folderPath.dropFirst(mediaPath.count)
+        let trimmedLocal = localMediaPath.hasSuffix("/") ? String(localMediaPath.dropLast()) : localMediaPath
+        return trimmedLocal + suffix
     }
 
     /// `source_instruction_images` entries from the ForgeCore relay/import.js

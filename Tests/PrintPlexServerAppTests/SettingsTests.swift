@@ -199,4 +199,35 @@ final class SettingsTests: XCTestCase {
             XCTAssertEqual(overview.shopifyStoreDomain, "ma-boutique.myshopify.com")
         }
     }
+
+    // MARK: - Local media path
+
+    func testLocalMediaPathDefaultsEmptyAndUpdates() async throws {
+        try await app.test(.GET, "api/settings") { res async throws in
+            let overview = try res.content.decode(SettingsOverview.self)
+            XCTAssertEqual(overview.localMediaPath, "")
+        }
+
+        try await app.test(.PATCH, "api/settings/local-path", beforeRequest: { req in
+            try req.content.encode(LocalPathSettingsUpdateRequest(localMediaPath: "/Volumes/NAS/PrintPlex"))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let response = try res.content.decode(LocalPathSettingsResponse.self)
+            XCTAssertEqual(response.localMediaPath, "/Volumes/NAS/PrintPlex")
+        })
+
+        try await app.test(.GET, "api/settings") { res async throws in
+            let overview = try res.content.decode(SettingsOverview.self)
+            XCTAssertEqual(overview.localMediaPath, "/Volumes/NAS/PrintPlex")
+        }
+
+        // Whitespace-only clears it back to empty (mirrors the "empty string
+        // clears the field" convention used elsewhere in the API).
+        try await app.test(.PATCH, "api/settings/local-path", beforeRequest: { req in
+            try req.content.encode(LocalPathSettingsUpdateRequest(localMediaPath: "   "))
+        }, afterResponse: { res async throws in
+            let response = try res.content.decode(LocalPathSettingsResponse.self)
+            XCTAssertEqual(response.localMediaPath, "")
+        })
+    }
 }

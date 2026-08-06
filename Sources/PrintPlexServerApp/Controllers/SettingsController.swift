@@ -8,6 +8,9 @@ struct SettingsOverview: Content {
     var serverVersion: String
     var mediaPath: String
     var dataPath: String
+    /// User-entered — the host path PRINTPLEX_MEDIA_PATH is bind-mounted
+    /// from, unknowable to the container itself. Empty until set.
+    var localMediaPath: String
     var autoScanEnabled: Bool
     var scanIntervalMinutes: Int
     var shopifyStoreDomain: String
@@ -20,6 +23,14 @@ struct SettingsOverview: Content {
 struct ScanSettingsUpdateRequest: Content {
     var autoScanEnabled: Bool?
     var scanIntervalMinutes: Int?
+}
+
+struct LocalPathSettingsResponse: Content {
+    var localMediaPath: String
+}
+
+struct LocalPathSettingsUpdateRequest: Content {
+    var localMediaPath: String
 }
 
 struct ShopifySettingsResponse: Content {
@@ -43,6 +54,7 @@ struct SettingsController: RouteCollection {
         let settings = routes.grouped("api", "settings")
         settings.get(use: overview)
         settings.patch("scan", use: updateScan)
+        settings.patch("local-path", use: updateLocalPath)
         settings.get("shopify", use: shopify)
         settings.put("shopify", use: updateShopify)
     }
@@ -51,6 +63,7 @@ struct SettingsController: RouteCollection {
     func overview(req: Request) async throws -> SettingsOverview {
         let scanSettings = await req.application.scanService.currentScanSettings()
         let config = req.application.appConfig
+        let settingsRow = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: req.db)
 
         var storeDomain = ""
         var configured = false
@@ -70,6 +83,7 @@ struct SettingsController: RouteCollection {
             serverVersion: printPlexServerVersion,
             mediaPath: config.mediaPath,
             dataPath: config.dataPath,
+            localMediaPath: settingsRow?.localMediaPath ?? "",
             autoScanEnabled: scanSettings.autoScanEnabled,
             scanIntervalMinutes: scanSettings.scanIntervalMinutes,
             shopifyStoreDomain: storeDomain,
@@ -87,6 +101,18 @@ struct SettingsController: RouteCollection {
             autoScanEnabled: body.autoScanEnabled,
             scanIntervalMinutes: body.scanIntervalMinutes
         )
+    }
+
+    @Sendable
+    func updateLocalPath(req: Request) async throws -> LocalPathSettingsResponse {
+        let body = try req.content.decode(LocalPathSettingsUpdateRequest.self)
+        guard let row = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: req.db) else {
+            throw Abort(.internalServerError, reason: "Ligne de réglages absente")
+        }
+        let trimmed = body.localMediaPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        row.localMediaPath = trimmed.isEmpty ? nil : trimmed
+        try await row.save(on: req.db)
+        return LocalPathSettingsResponse(localMediaPath: row.localMediaPath ?? "")
     }
 
     /// Includes the plaintext access token so the edit form can be prefilled —

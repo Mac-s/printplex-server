@@ -53,12 +53,15 @@ struct ProjectController: RouteCollection {
             .filter(\.$project.$id != nil)
             .all()
         let filesByProject = Dictionary(grouping: allProjectFiles) { $0.$project.id! }
+        let localMediaPath = try await localMediaPath(on: req.db)
+        let mediaPath = req.application.appConfig.mediaPath
 
         return models.map { model in
             let files = filesByProject[model.id!] ?? []
             let (coverFileId, partsCount, totalFileCount, imageCount) = model.coverAndCounts(from: files)
             return model.toDTO(coverFileId: coverFileId, partsCount: partsCount,
-                              totalFileCount: totalFileCount, imageCount: imageCount)
+                              totalFileCount: totalFileCount, imageCount: imageCount,
+                              localFolderPath: model.localFolderPath(mediaPath: mediaPath, localMediaPath: localMediaPath))
         }
     }
 
@@ -70,8 +73,11 @@ struct ProjectController: RouteCollection {
             .sort(\.$fileName)
             .all()
         let (coverFileId, partsCount, totalFileCount, imageCount) = model.coverAndCounts(from: files)
+        let localMediaPath = try await localMediaPath(on: req.db)
+        let mediaPath = req.application.appConfig.mediaPath
         return model.toDTO(files: files.map { $0.toDTO() }, coverFileId: coverFileId,
-                          partsCount: partsCount, totalFileCount: totalFileCount, imageCount: imageCount)
+                          partsCount: partsCount, totalFileCount: totalFileCount, imageCount: imageCount,
+                          localFolderPath: model.localFolderPath(mediaPath: mediaPath, localMediaPath: localMediaPath))
     }
 
     /// Updates project metadata in the DB **and** in the folder's info.json,
@@ -192,5 +198,9 @@ struct ProjectController: RouteCollection {
             throw Abort(.notFound, reason: "Projet introuvable")
         }
         return model
+    }
+
+    private func localMediaPath(on db: Database) async throws -> String? {
+        try await AppSettingsModel.find(AppSettingsModel.singletonID, on: db)?.localMediaPath
     }
 }

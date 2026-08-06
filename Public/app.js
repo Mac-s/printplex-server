@@ -1579,11 +1579,12 @@ function wireImageStrip(project) {
 
 function actionsSectionHtml(project, modelParts) {
   const downloadableFiles = (project.files || []).filter((f) => f.fileRole !== "renderImage");
+  const pathButtonLabel = project.localFolderPath ? "📁 Ouvrir le dossier local" : "📁 Copier le chemin du dossier";
   return `
     <div class="section">
       <div class="section-title">Actions</div>
       <div class="actions-row">
-        <button class="btn btn-sm" id="btnCopyPath" title="${escapeHtml(project.folderPath)}">📁 Copier le chemin du dossier</button>
+        <button class="btn btn-sm" id="btnCopyPath" title="${escapeHtml(project.localFolderPath || project.folderPath)}">${pathButtonLabel}</button>
         ${modelParts.length ? `<button class="btn btn-sm" id="btnPreview3d">🧊 Visualiser en 3D</button>` : ""}
         ${downloadableFiles.length ? `<button class="btn btn-sm" id="btnDownloadParts">⬇ Télécharger les pièces</button>` : ""}
       </div>
@@ -1600,9 +1601,16 @@ function flashActionMessage(text, isError) {
 
 function wireActionsSection(project, modelParts) {
   document.getElementById("btnCopyPath")?.addEventListener("click", async () => {
+    const localPath = project.localFolderPath;
+    if (localPath) {
+      // Best-effort: some browsers (notably Safari on macOS) hand a file://
+      // directory link off to Finder; others just show a file listing in a
+      // new tab. Either way, the path is also copied so it's always usable.
+      window.open(`file://${encodeURI(localPath)}`, "_blank");
+    }
     try {
-      await navigator.clipboard.writeText(project.folderPath);
-      flashActionMessage("Chemin copié dans le presse-papiers.");
+      await navigator.clipboard.writeText(localPath || project.folderPath);
+      flashActionMessage(localPath ? "Dossier ouvert (si le navigateur le permet) — chemin aussi copié." : "Chemin copié dans le presse-papiers.");
     } catch (_) {
       flashActionMessage("Impossible de copier (autorisation presse-papiers refusée).", true);
     }
@@ -2057,6 +2065,10 @@ function renderLibraryTabHtml(overview) {
         <div><div class="label">Données du serveur</div><div class="hint">Base SQLite et cache de vignettes</div></div>
         <span class="value">${escapeHtml(overview.dataPath)}</span>
       </div>
+      <div class="setting-row">
+        <div><div class="label">Chemin local</div><div class="hint">Chemin réel sur ta machine correspondant au répertoire média ci-dessus — permet au bouton "Ouvrir le dossier" d'un projet de pointer au bon endroit</div></div>
+        <input id="settingsLocalMediaPath" value="${escapeHtml(overview.localMediaPath ?? "")}" placeholder="ex. /Volumes/NAS/PrintPlex" style="max-width:280px" autocomplete="off" />
+      </div>
     </div>
 
     <div class="section">
@@ -2127,6 +2139,20 @@ function wireLibraryTab(overview) {
     saveScanSettings({ scanIntervalMinutes: Number(select.value) });
   });
   document.getElementById("btnScanFromSettings").addEventListener("click", triggerScan);
+
+  const localPathInput = document.getElementById("settingsLocalMediaPath");
+  let localPathSaveTimer = null;
+  const saveLocalPath = () => {
+    clearTimeout(localPathSaveTimer);
+    api("/api/settings/local-path", { method: "PATCH", body: JSON.stringify({ localMediaPath: localPathInput.value.trim() }) })
+      .then(() => { msg.innerHTML = `<div class="message ok">Enregistré.</div>`; })
+      .catch((e) => { msg.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`; });
+  };
+  localPathInput.addEventListener("input", () => {
+    clearTimeout(localPathSaveTimer);
+    localPathSaveTimer = setTimeout(saveLocalPath, 600);
+  });
+  localPathInput.addEventListener("blur", saveLocalPath);
 }
 
 // ── Bibliothèques (Plex-style folder list, under the "Bibliothèque" tab) ──
