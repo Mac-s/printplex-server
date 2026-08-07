@@ -281,14 +281,27 @@ function projectHasCompleteMetadata(p) {
   return Boolean(p.category) && Boolean(p.creator && p.creator.length)
     && (p.suggestedMaterials || []).length > 0 && (p.tags || []).length > 0;
 }
-// Creator is filled in manually (e.g. when a design is downloaded straight from
-// ForgeCore without running the scraper yet) — flag it as a to-do until
-// `import.js` has actually run and filled in `sourceUrl`.
-function needsForgeCoreImport(p) {
-  return (p.creator || "").trim().toLowerCase() === "forgecore" && !p.sourceUrl;
+// Creators whose designs live on a scrapeable site — matched against
+// `project.creator` (case-insensitive) to offer the one-click import form.
+// relay.js (forgecore-scraper/) picks the actual scraper script from the
+// pasted URL's domain, independently of this — this map only drives the
+// dashboard's copy (label/placeholder/icon) and the "needs import" flag.
+const SOURCE_IMPORT_PRESETS = {
+  forgecore: { icon: "🔨", label: "ForgeCore", placeholder: "https://prinnit.com/ForgeCore/design/…" },
+  budwin: { icon: "🧊", label: "Budwin", placeholder: "https://makerworld.com/…/models/…" },
+};
+
+// Creator is filled in manually (e.g. when a design is downloaded straight
+// from the source site without running the scraper yet) — flag it as a
+// to-do until the scraper has actually run and filled in `sourceUrl`.
+function sourceImportPreset(p) {
+  return SOURCE_IMPORT_PRESETS[(p.creator || "").trim().toLowerCase()];
+}
+function needsSourceImport(p) {
+  return Boolean(sourceImportPreset(p)) && !p.sourceUrl;
 }
 function incompleteProjects() {
-  return state.projects.filter((p) => !projectHasCompleteMetadata(p) || needsForgeCoreImport(p));
+  return state.projects.filter((p) => !projectHasCompleteMetadata(p) || needsSourceImport(p));
 }
 function missingMetadataLabels(p) {
   const missing = [];
@@ -296,7 +309,10 @@ function missingMetadataLabels(p) {
   if (!p.creator || !p.creator.length) missing.push("Créateur");
   if (!(p.suggestedMaterials || []).length) missing.push("Matériaux");
   if (!(p.tags || []).length) missing.push("Tags");
-  if (needsForgeCoreImport(p)) missing.push("🔨 Import ForgeCore");
+  if (needsSourceImport(p)) {
+    const preset = sourceImportPreset(p);
+    missing.push(`${preset.icon} Import ${preset.label}`);
+  }
   return missing;
 }
 function recentlyAdded() {
@@ -652,7 +668,7 @@ function setDetailWide(isWide) {
 }
 
 function showGrid(opts = {}) {
-  stopForgeCorePolling();
+  stopSourceScrapePolling();
   if (!opts.keepFilter) state.filter = { type: "all" };
   state.view = "grid";
   state.selectedId = null;
@@ -1137,7 +1153,7 @@ function getPersistedEstimateMaterialId() {
 }
 
 async function openProject(id) {
-  stopForgeCorePolling();
+  stopSourceScrapePolling();
   state.selectedId = id;
   state.view = "project";
   setDetailWide(false);
@@ -1235,7 +1251,7 @@ function wireProjectDetailEvents(project) {
       return [...all].filter((v) => v.toLowerCase().includes(q) && !(project.tags || []).includes(v)).slice(0, 8);
     });
 
-  wireForgeCoreSection(project);
+  wireSourceSection(project);
   if (project.sourceUrl) {
     wireChipEditor("sourceHardwareChipList", project.sourceHardware || [],
       (list) => updateChipField(project, "sourceHardware", list),
@@ -1385,9 +1401,9 @@ function sourceInstructionImageFiles(project) {
 
 // Shown under the URL field whenever the relay (npm run relay, on the
 // user's own machine — see forgecore-scraper/) is mid-job or last failed.
-function forgeCoreScrapeStatusHtml(project) {
+function sourceScrapeStatusHtml(project) {
   if (project.sourceScrapeStatus === "pending") {
-    return `<p class="hint" style="margin:2px 0 12px">⏳ En attente du relais ForgeCore — lance <code>npm run relay</code> sur ta machine s'il ne tourne pas déjà.</p>`;
+    return `<p class="hint" style="margin:2px 0 12px">⏳ En attente du relais de scraping — lance <code>npm run relay</code> sur ta machine s'il ne tourne pas déjà.</p>`;
   }
   if (project.sourceScrapeStatus === "failed") {
     return `<div class="message err" style="margin:2px 0 12px">Échec du scraping : ${escapeHtml(project.sourceScrapeError || "erreur inconnue")}</div>`;
@@ -1396,39 +1412,41 @@ function forgeCoreScrapeStatusHtml(project) {
 }
 
 function sourceSectionHtml(project) {
-  const awaitingImport = needsForgeCoreImport(project);
+  const awaitingImport = needsSourceImport(project);
   if (!project.sourceUrl && !awaitingImport) return "";
 
-  // Not imported yet, but tagged as a ForgeCore design — offer the one-click
-  // scrape trigger instead of the full (still empty) section below.
+  // Not imported yet, but tagged as a known-source design — offer the
+  // one-click scrape trigger instead of the full (still empty) section below.
   if (!project.sourceUrl) {
+    const preset = sourceImportPreset(project);
     return `
       <div class="section">
-        <div class="section-title">🔨 ForgeCore</div>
+        <div class="section-title">${preset.icon} ${escapeHtml(preset.label)}</div>
         <div class="field" style="margin-bottom:6px">
           <label>Lien vers la fiche d'origine</label>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
-            <input id="detailSourceUrlInput" style="flex:1; min-width:200px" placeholder="https://prinnit.com/ForgeCore/design/…" autocomplete="off" />
-            <button class="btn btn-sm" id="btnForgeCoreScrape" style="white-space:nowrap; flex-shrink:0">🔎 Lancer le scraping</button>
+            <input id="detailSourceUrlInput" style="flex:1; min-width:200px" placeholder="${escapeHtml(preset.placeholder)}" autocomplete="off" />
+            <button class="btn btn-sm" id="btnSourceScrape" style="white-space:nowrap; flex-shrink:0">🔎 Lancer le scraping</button>
           </div>
         </div>
-        ${forgeCoreScrapeStatusHtml(project)}
+        ${sourceScrapeStatusHtml(project)}
       </div>`;
   }
 
+  const preset = sourceImportPreset(project) || { icon: "🔗", label: "Source" };
   const instructionFiles = sourceInstructionImageFiles(project);
   return `
     <div class="section">
-      <div class="section-title">🔨 ForgeCore</div>
+      <div class="section-title">${preset.icon} ${escapeHtml(preset.label)}</div>
       <div class="field" style="margin-bottom:10px">
         <label>Lien vers la fiche d'origine</label>
         <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
           <input id="detailSourceUrlInput" style="flex:1; min-width:200px" value="${escapeHtml(project.sourceUrl)}" placeholder="https://…" autocomplete="off" />
           <a class="btn btn-sm" href="${escapeHtml(project.sourceUrl)}" target="_blank" rel="noopener">Voir</a>
-          <button class="btn btn-sm" id="btnForgeCoreScrape" style="white-space:nowrap; flex-shrink:0">🔁 Relancer le scraping</button>
+          <button class="btn btn-sm" id="btnSourceScrape" style="white-space:nowrap; flex-shrink:0">🔁 Relancer le scraping</button>
         </div>
       </div>
-      ${forgeCoreScrapeStatusHtml(project)}
+      ${sourceScrapeStatusHtml(project)}
       <div class="detail-metadata-row">
         <div class="meta-field"><label>⚖️ Poids estimé (designer)</label><input id="detailSourceWeightInput" value="${escapeHtml(project.sourceEstimatedWeight ?? "")}" placeholder="ex. 1.16kg" autocomplete="off" /></div>
         <div class="meta-field"><label>⏱️ Temps estimé (designer)</label><input id="detailSourcePrintTimeInput" value="${escapeHtml(project.sourceEstimatedPrintTime ?? "")}" placeholder="ex. 2d 5h 44m" autocomplete="off" /></div>
@@ -1451,9 +1469,9 @@ function sourceSectionHtml(project) {
 // Pastes the URL + clicks "Lancer/Relancer le scraping": marks the project
 // pending (optimistic re-render) and PATCHes the same, for the relay running
 // on the user's own machine (forgecore-scraper/relay.js) to pick up.
-async function launchForgeCoreScrape(project, url) {
+async function launchSourceScrape(project, url) {
   const trimmed = (url || "").trim();
-  if (!trimmed) { alert("Colle d'abord le lien vers la fiche ForgeCore."); return; }
+  if (!trimmed) { alert("Colle d'abord le lien vers la fiche d'origine."); return; }
   project.sourceUrl = trimmed;
   project.sourceScrapeStatus = "pending";
   project.sourceScrapeError = null;
@@ -1475,20 +1493,20 @@ async function launchForgeCoreScrape(project, url) {
 // this is a background job with no push channel, not a page load) and
 // re-render as soon as it lands. Cleared on navigating away (openProject/
 // showGrid) so it never outlives the detail view that started it.
-let forgeCorePollTimer = null;
-function stopForgeCorePolling() {
-  if (forgeCorePollTimer) { clearInterval(forgeCorePollTimer); forgeCorePollTimer = null; }
+let sourceScrapePollTimer = null;
+function stopSourceScrapePolling() {
+  if (sourceScrapePollTimer) { clearInterval(sourceScrapePollTimer); sourceScrapePollTimer = null; }
 }
-function startForgeCorePollingIfNeeded(project) {
-  stopForgeCorePolling();
+function startSourceScrapePollingIfNeeded(project) {
+  stopSourceScrapePolling();
   if (project.sourceScrapeStatus !== "pending") return;
-  forgeCorePollTimer = setInterval(async () => {
-    if (state.selectedId !== project.id) { stopForgeCorePolling(); return; }
+  sourceScrapePollTimer = setInterval(async () => {
+    if (state.selectedId !== project.id) { stopSourceScrapePolling(); return; }
     try {
       const fresh = await api(`/api/projects/${project.id}`);
-      if (state.selectedId !== project.id) { stopForgeCorePolling(); return; }
+      if (state.selectedId !== project.id) { stopSourceScrapePolling(); return; }
       updateLocalProject(project.id, fresh);
-      if (fresh.sourceScrapeStatus !== "pending") stopForgeCorePolling();
+      if (fresh.sourceScrapeStatus !== "pending") stopSourceScrapePolling();
       renderProjectDetail(fresh);
     } catch (e) {
       // Transient network hiccup — just try again next tick.
@@ -1496,10 +1514,10 @@ function startForgeCorePollingIfNeeded(project) {
   }, 4000);
 }
 
-function wireForgeCoreSection(project) {
+function wireSourceSection(project) {
   const urlInput = document.getElementById("detailSourceUrlInput");
-  const scrapeBtn = document.getElementById("btnForgeCoreScrape");
-  scrapeBtn?.addEventListener("click", () => launchForgeCoreScrape(project, urlInput?.value));
+  const scrapeBtn = document.getElementById("btnSourceScrape");
+  scrapeBtn?.addEventListener("click", () => launchSourceScrape(project, urlInput?.value));
 
   // The weight/print-time fields only exist once a scrape has actually
   // produced a full section — the pre-import minimal form has none of these.
@@ -1516,7 +1534,7 @@ function wireForgeCoreSection(project) {
     }
   }
 
-  startForgeCorePollingIfNeeded(project);
+  startSourceScrapePollingIfNeeded(project);
 }
 
 // ── Image gallery strip (natural aspect ratio, cover-setting via context menu) ──
@@ -2019,7 +2037,7 @@ function setSettingsButtonActive(active) {
 }
 
 async function openSettings(tab) {
-  stopForgeCorePolling();
+  stopSourceScrapePolling();
   state.view = "settings";
   state.selectedId = null;
   setDetailWide(false);
