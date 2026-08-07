@@ -43,9 +43,12 @@ struct ForgeCoreController: RouteCollection {
         routes.get("api", "forgecore", "pending", use: pending)
         // Base64-encoded photos push this well past Vapor's 16kb default body
         // size limit — raised just for this route rather than globally, since
-        // nothing else needs to accept multi-megabyte request bodies.
+        // nothing else needs to accept multi-megabyte request bodies. 50mb
+        // was enough for ForgeCore designs but too tight for MakerWorld ones
+        // (higher-res renders, often more photos per design — a real design
+        // with 23 official photos alone hit a 413 here), hence the headroom.
         routes.on(.POST, "api", "projects", ":projectID", "forgecore-import-result",
-                  body: .collect(maxSize: "50mb"), use: importResult)
+                  body: .collect(maxSize: "200mb"), use: importResult)
     }
 
     @Sendable
