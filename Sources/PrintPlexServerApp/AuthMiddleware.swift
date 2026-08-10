@@ -19,7 +19,12 @@ struct AuthMiddleware: AsyncMiddleware {
         if request.isAuthenticated {
             return try await next.respond(to: request)
         }
-        if let providedKey = request.headers.first(name: "X-API-Key"), !providedKey.isEmpty,
+        // Query-param fallback exists for SwiftUI's `AsyncImage(url:)`, which
+        // has no way to attach a header — thumbnails/gallery images in the
+        // native client go through this, not the header.
+        let providedKey = request.headers.first(name: "X-API-Key")
+            ?? request.query[String.self, at: "api_key"]
+        if let providedKey, !providedKey.isEmpty,
            let row = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: request.db),
            let apiKey = row.apiKey, !apiKey.isEmpty, providedKey == apiKey {
             return try await next.respond(to: request)
