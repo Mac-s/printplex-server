@@ -199,6 +199,10 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
     public var partsCount: Int
     public var totalFileCount: Int
     public var imageCount: Int
+    /// True once at least one 3MF file has real, measured print data (the
+    /// "Impression réelle" block) — backs the "Estimé manuellement" sidebar
+    /// filter. Precomputed like the counts above, from the same file set.
+    public var hasManualEstimate: Bool
 
     public init(id: UUID = UUID(), name: String, folderPath: String, localFolderPath: String? = nil,
                 lastModifiedAt: Date = Date(), dateAdded: Date = Date(),
@@ -212,7 +216,8 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
                 sourceScrapeStatus: String? = nil, sourceScrapeError: String? = nil,
                 shopifyProductId: String? = nil,
                 files: [FileDTO]? = nil, coverFileId: UUID? = nil,
-                partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0) {
+                partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0,
+                hasManualEstimate: Bool = false) {
         self.id = id
         self.name = name
         self.folderPath = folderPath
@@ -239,6 +244,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
         self.partsCount = partsCount
         self.totalFileCount = totalFileCount
         self.imageCount = imageCount
+        self.hasManualEstimate = hasManualEstimate
         self.shopifyProductId = shopifyProductId
         self.files = files
     }

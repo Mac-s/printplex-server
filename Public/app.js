@@ -25,7 +25,7 @@ const state = {
   filter: { type: "all" },
   selected: {
     category: new Set(), tag: new Set(), material: new Set(), creator: new Set(),
-    printed: new Set(), shopify: new Set(),
+    printed: new Set(), shopify: new Set(), estimated: new Set(),
   },
   // "Categories"/"Materiaux"/"Tags"/"Types 3D" tend to accumulate a lot of
   // entries — collapsed by default so the sidebar opens uncluttered; "creator"
@@ -47,9 +47,15 @@ const FILTER_FIELDS = {
   // still letting them combine with the other fields via `state.selected`.
   printed:  { label: "Impression", custom: true, multivalued: false, getValues: (p) => [p.alreadyPrinted ? "printed" : "not-printed"] },
   shopify:  { label: "Shopify",    custom: true, multivalued: false, getValues: (p) => [shopifyStatusOf(p)] },
+  // Rendered in the same "Impression" sidebar section as `printed` (see
+  // renderSidebar) but kept as its own field/key so the two combine with AND
+  // semantics instead of one overwriting the other (e.g. déjà imprimé AND
+  // pas encore estimé).
+  estimated: { label: "Impression", custom: true, multivalued: false, getValues: (p) => [p.hasManualEstimate ? "estimated" : "not-estimated"] },
 };
 const FILTER_VALUE_LABELS = {
   printed: { printed: "Déjà imprimé", "not-printed": "Non imprimé" },
+  estimated: { estimated: "Estimé manuellement", "not-estimated": "À estimer" },
 };
 // `shopify`'s labels come from SHOPIFY_STATUS_LABEL, declared further below —
 // looked up lazily here (at call time) rather than folded into
@@ -379,6 +385,10 @@ function projectsMatchingPrinted(printed) {
   return state.projects.filter((p) => Boolean(p.alreadyPrinted) === printed);
 }
 
+function projectsMatchingEstimated(estimated) {
+  return state.projects.filter((p) => Boolean(p.hasManualEstimate) === estimated);
+}
+
 /// Inverse of the "none" Shopify filter: products that exist on Shopify but
 /// that no project in the library currently matches (by explicit assignment
 /// or by name), i.e. products still needing a project on this side.
@@ -456,8 +466,10 @@ function toggleMultiFilter(key, value) {
   showGrid({ keepFilter: true });
 }
 
+// `key` may be comma-separated (e.g. "printed,estimated") to clear several
+// fields sharing one "Effacer la sélection" link in the same sidebar block.
 function clearMultiFilter(key) {
-  state.selected[key].clear();
+  for (const k of key.split(",")) state.selected[k].clear();
   state.filter = anySelectionActive() ? { type: "filtered" } : { type: "all" };
   showGrid({ keepFilter: true });
 }
@@ -495,15 +507,20 @@ function renderSidebar() {
   }
   html += `</div>`;
 
-  // Impression — déjà imprimé / non imprimé (combinable with the other fields)
+  // Impression — déjà imprimé / non imprimé, estimé manuellement / à estimer
+  // (two independent fields, combinable with each other and the rest).
   if (state.projects.length > 0) {
     const printedCount = projectsMatchingPrinted(true).length;
     const notPrintedCount = projectsMatchingPrinted(false).length;
+    const estimatedCount = projectsMatchingEstimated(true).length;
+    const notEstimatedCount = projectsMatchingEstimated(false).length;
     let body = "";
     body += filterItemHtml({ icon: "✅", label: "Déjà imprimé", count: printedCount, active: state.selected.printed.has("printed"), action: "multi", key: "printed", value: "printed" });
     body += filterItemHtml({ icon: "⭕", label: "Non imprimé", count: notPrintedCount, active: state.selected.printed.has("not-printed"), action: "multi", key: "printed", value: "not-printed" });
-    if (state.selected.printed.size > 0) {
-      body += `<button class="filter-clear" data-action="clear" data-key="printed">Effacer la sélection</button>`;
+    body += filterItemHtml({ icon: "📏", label: "Estimé manuellement", count: estimatedCount, active: state.selected.estimated.has("estimated"), action: "multi", key: "estimated", value: "estimated" });
+    body += filterItemHtml({ icon: "❔", label: "À estimer", count: notEstimatedCount, active: state.selected.estimated.has("not-estimated"), action: "multi", key: "estimated", value: "not-estimated" });
+    if (state.selected.printed.size > 0 || state.selected.estimated.size > 0) {
+      body += `<button class="filter-clear" data-action="clear" data-key="printed,estimated">Effacer la sélection</button>`;
     }
     html += groupHtml("printed", "Impression", body);
   }
@@ -1888,8 +1905,8 @@ function actualPrintDataHtml(file, level) {
       </div>
       <div class="form-grid">
         <div class="field">
-          <label>Temps réel (min)</label>
-          <input type="number" min="0" class="actual-time-input" data-file-id="${file.id}" value="${actualTimeSec != null ? Math.round(actualTimeSec / 60) : ""}" placeholder="ex. 150" />
+          <label>Temps réel (h)</label>
+          <input type="number" min="0" step="0.25" class="actual-time-input" data-file-id="${file.id}" value="${actualTimeSec != null ? (actualTimeSec / 3600).toFixed(2) : ""}" placeholder="ex. 2.5" />
         </div>
         <div class="field">
           <label>Filament réel (g)</label>
@@ -2008,9 +2025,9 @@ function wireEstimateResultEvents(project) {
   });
   box.querySelectorAll(".actual-time-input").forEach((input) => {
     input.addEventListener("change", () => {
-      const minutes = Number(input.value);
+      const hours = Number(input.value);
       saveActualPrintData(project, input.dataset.fileId, {
-        actualPrintTimeSec: Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes * 60) : null,
+        actualPrintTimeSec: Number.isFinite(hours) && hours > 0 ? Math.round(hours * 3600) : null,
       });
     });
   });

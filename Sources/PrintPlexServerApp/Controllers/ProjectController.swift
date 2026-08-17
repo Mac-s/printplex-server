@@ -61,7 +61,8 @@ struct ProjectController: RouteCollection {
             let (coverFileId, partsCount, totalFileCount, imageCount) = model.coverAndCounts(from: files)
             return model.toDTO(coverFileId: coverFileId, partsCount: partsCount,
                               totalFileCount: totalFileCount, imageCount: imageCount,
-                              localFolderPath: model.localFolderPath(mediaPath: mediaPath, localMediaPath: localMediaPath))
+                              localFolderPath: model.localFolderPath(mediaPath: mediaPath, localMediaPath: localMediaPath),
+                              hasManualEstimate: model.hasManualEstimate(from: files))
         }
     }
 
@@ -77,7 +78,8 @@ struct ProjectController: RouteCollection {
         let mediaPath = req.application.appConfig.mediaPath
         return model.toDTO(files: files.map { $0.toDTO() }, coverFileId: coverFileId,
                           partsCount: partsCount, totalFileCount: totalFileCount, imageCount: imageCount,
-                          localFolderPath: model.localFolderPath(mediaPath: mediaPath, localMediaPath: localMediaPath))
+                          localFolderPath: model.localFolderPath(mediaPath: mediaPath, localMediaPath: localMediaPath),
+                          hasManualEstimate: model.hasManualEstimate(from: files))
     }
 
     /// Updates project metadata in the DB **and** in the folder's info.json,

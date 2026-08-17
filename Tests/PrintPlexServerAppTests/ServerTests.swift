@@ -157,6 +157,18 @@ final class ServerTests: XCTestCase {
             XCTAssertEqual(file.printParams?.manualWorkLevel, "medium", "unrelated field untouched")
         })
 
+        // 4b-ter. hasManualEstimate flips true once real print data exists on
+        // any file — backs the "Estimé manuellement" sidebar filter, and is
+        // precomputed on both the list and detail endpoints.
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertTrue(project.hasManualEstimate)
+        }
+        try await app.test(.GET, "api/projects") { res async throws in
+            let projects = try res.content.decode([ProjectDTO].self)
+            XCTAssertEqual(projects.first { $0.id == id }?.hasManualEstimate, true)
+        }
+
         // 4c. "Already printed" is a manual flag, persisted like other metadata
         // (DB + info.json), and readable from both list and detail endpoints.
         try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in

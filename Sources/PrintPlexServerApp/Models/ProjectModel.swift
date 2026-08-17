@@ -61,7 +61,7 @@ final class ProjectModel: Model, @unchecked Sendable {
 
     func toDTO(files: [FileDTO]? = nil, coverFileId: UUID? = nil,
                partsCount: Int = 0, totalFileCount: Int = 0, imageCount: Int = 0,
-               localFolderPath: String? = nil) -> ProjectDTO {
+               localFolderPath: String? = nil, hasManualEstimate: Bool = false) -> ProjectDTO {
         ProjectDTO(
             id: id ?? UUID(),
             name: name,
@@ -90,7 +90,8 @@ final class ProjectModel: Model, @unchecked Sendable {
             coverFileId: coverFileId,
             partsCount: partsCount,
             totalFileCount: totalFileCount,
-            imageCount: imageCount
+            imageCount: imageCount,
+            hasManualEstimate: hasManualEstimate
         )
     }
 
@@ -116,6 +117,13 @@ final class ProjectModel: Model, @unchecked Sendable {
             ?? files.first { $0.fileRoleRaw == FileRole.modelPart.rawValue }
         let partsCount = files.filter { $0.fileRoleRaw == FileRole.modelPart.rawValue }.count
         return (cover?.id, partsCount, files.count, images.count)
+    }
+
+    /// True once at least one file's real print data (the "Impression
+    /// réelle" block) has been recorded — backs the "Estimé manuellement"
+    /// sidebar filter.
+    func hasManualEstimate(from files: [FileModel]) -> Bool {
+        files.contains { $0.printParams?.actualPrintTimeSec != nil || $0.printParams?.actualFilamentGrams != nil }
     }
 
     /// Swaps the container's media root prefix (e.g. "/media") for the host
