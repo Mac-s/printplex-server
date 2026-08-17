@@ -1857,9 +1857,51 @@ function estimateUnavailableRowHtml(file) {
     </div>`;
 }
 
+// Once actually printed, real values (from the slicer or a scale at the
+// printer) are more accurate than the geometry-based estimate — they take
+// priority for display when present. Costs are rescaled from the estimate's
+// own €/g and €/s rates rather than needing printer/material passed in here.
+function effectiveEstimate(file, est) {
+  const actualTimeSec = file.printParams?.actualPrintTimeSec;
+  const actualWeightG = file.printParams?.actualFilamentGrams;
+  const weightG = actualWeightG ?? est.filamentWeightG;
+  const printTimeSeconds = actualTimeSec ?? est.printTimeSeconds;
+  const filamentRate = est.filamentWeightG > 0 ? est.filamentCostEur / est.filamentWeightG : 0;
+  const timeRate = est.printTimeSeconds > 0 ? est.timeCostEur / est.printTimeSeconds : 0;
+  const filamentCostEur = weightG * filamentRate;
+  const timeCostEur = printTimeSeconds * timeRate;
+  return {
+    weightG, printTimeSeconds, filamentCostEur, timeCostEur,
+    totalCostEur: filamentCostEur + timeCostEur + est.manualCostEur,
+    isActualWeight: actualWeightG != null, isActualTime: actualTimeSec != null,
+  };
+}
+
+function actualPrintDataHtml(file, level) {
+  const actualTimeSec = file.printParams?.actualPrintTimeSec;
+  const actualWeightG = file.printParams?.actualFilamentGrams;
+  return `
+    <div class="actual-print-block">
+      <div class="estimate-file-name">🎯 Impression réelle</div>
+      <div class="segmented" data-file-id="${file.id}">
+        ${MANUAL_WORK_LEVELS.map((k) => `<button class="seg-btn ${k === level ? "active" : ""}" data-level="${k}">${MANUAL_WORK_LABEL[k]}</button>`).join("")}
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label>Temps réel (min)</label>
+          <input type="number" min="0" class="actual-time-input" data-file-id="${file.id}" value="${actualTimeSec != null ? Math.round(actualTimeSec / 60) : ""}" placeholder="ex. 150" />
+        </div>
+        <div class="field">
+          <label>Filament réel (g)</label>
+          <input type="number" min="0" step="0.1" class="actual-weight-input" data-file-id="${file.id}" value="${actualWeightG ?? ""}" placeholder="ex. 187" />
+        </div>
+      </div>
+    </div>`;
+}
+
 function estimateCardHtml(file, est, stats) {
   const level = detailState.manualWorkPerFile[file.id] || "aucun";
-  const totalCost = est.filamentCostEur + est.timeCostEur + est.manualCostEur;
+  const eff = effectiveEstimate(file, est);
   const hasMultiplePlates = file.plateStats && file.plateStats.length > 1;
   return `
     <div class="estimate-card">
@@ -1871,22 +1913,20 @@ function estimateCardHtml(file, est, stats) {
             ${file.plateStats.map((p) => `<option value="${p.plateIndex}" ${p.plateIndex === stats.plateIndex ? "selected" : ""}>Plateau ${p.plateIndex + 1}</option>`).join("")}
           </select>
         </div>` : ""}
-      <div class="segmented" data-file-id="${file.id}">
-        ${MANUAL_WORK_LEVELS.map((k) => `<button class="seg-btn ${k === level ? "active" : ""}" data-level="${k}">${MANUAL_WORK_LABEL[k]}</button>`).join("")}
-      </div>
       <div class="estimate-grid">
-        <span>⚖️ ${est.filamentWeightG.toFixed(0)} g</span>
+        <span>⚖️ ${eff.weightG.toFixed(0)} g${eff.isActualWeight ? " ✅" : ""}</span>
         <span>📏 ${est.filamentLengthM.toFixed(1)} m</span>
-        <span>⏱ ${formatDuration(est.printTimeSeconds)}</span>
+        <span>⏱ ${formatDuration(eff.printTimeSeconds)}${eff.isActualTime ? " ✅" : ""}</span>
         <span>📚 ${est.layerCount} couches</span>
       </div>
       <div class="estimate-fit ${est.fitsOnBed ? "ok" : "bad"}">${est.fitsOnBed ? `✅ Tient sur ${escapeHtml(est.printerName)}` : `❌ Ne tient pas sur ${escapeHtml(est.printerName)}`}</div>
       <div class="cost-breakdown">
-        <div class="cost-row"><span>Filament</span><span>${formatEur(est.filamentCostEur)}</span></div>
-        <div class="cost-row"><span>Machine</span><span>${formatEur(est.timeCostEur)}</span></div>
+        <div class="cost-row"><span>Filament</span><span>${formatEur(eff.filamentCostEur)}</span></div>
+        <div class="cost-row"><span>Machine</span><span>${formatEur(eff.timeCostEur)}</span></div>
         <div class="cost-row"><span>Manutention</span><span>${formatEur(est.manualCostEur)}</span></div>
-        <div class="cost-row total"><span>Total</span><span>${formatEur(totalCost)}</span></div>
+        <div class="cost-row total"><span>Total</span><span>${formatEur(eff.totalCostEur)}</span></div>
       </div>
+      ${actualPrintDataHtml(file, level)}
     </div>`;
 }
 
@@ -1932,7 +1972,16 @@ function renderEstimateResults(project) {
 
   let html = rows.map(({ file, est, stats }) => estimateCardHtml(file, est, stats)).join("");
   html += unavailable.map((f) => estimateUnavailableRowHtml(f)).join("");
-  if (rows.length > 1) html += totalEstimateCardHtml(totalEstimate(rows.map((r) => r.est)));
+  if (rows.length > 1) {
+    // Effective (actual-prioritized) per-file values, so the total matches
+    // what each card above actually shows rather than the raw geometry estimate.
+    const effectiveRows = rows.map(({ file, est }) => {
+      const eff = effectiveEstimate(file, est);
+      return { ...est, filamentWeightG: eff.weightG, printTimeSeconds: eff.printTimeSeconds,
+               filamentCostEur: eff.filamentCostEur, timeCostEur: eff.timeCostEur };
+    });
+    html += totalEstimateCardHtml(totalEstimate(effectiveRows));
+  }
   box.innerHTML = html;
   wireEstimateResultEvents(project);
 }
@@ -1957,6 +2006,38 @@ function wireEstimateResultEvents(project) {
       renderEstimateResults(project);
     });
   });
+  box.querySelectorAll(".actual-time-input").forEach((input) => {
+    input.addEventListener("change", () => {
+      const minutes = Number(input.value);
+      saveActualPrintData(project, input.dataset.fileId, {
+        actualPrintTimeSec: Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes * 60) : null,
+      });
+    });
+  });
+  box.querySelectorAll(".actual-weight-input").forEach((input) => {
+    input.addEventListener("change", () => {
+      const grams = Number(input.value);
+      saveActualPrintData(project, input.dataset.fileId, {
+        actualFilamentGrams: Number.isFinite(grams) && grams > 0 ? grams : null,
+      });
+    });
+  });
+}
+
+// Real/measured print data (real slicer output, a scale at the printer) —
+// takes priority over the geometry-based estimate once set. `null` is sent
+// when the field is cleared, but the server only ever *sets* these fields
+// (same convention as `manualWorkLevel`), so clearing here doesn't clear it
+// server-side — a full reload will show the previously saved value again.
+async function saveActualPrintData(project, fileId, patch) {
+  try {
+    const updatedFile = await api(`/api/files/${fileId}`, { method: "PATCH", body: JSON.stringify(patch) });
+    const f = (project.files || []).find((pf) => pf.id === fileId);
+    if (f) f.printParams = updatedFile.printParams;
+    renderEstimateResults(project);
+  } catch (e) {
+    console.error("Échec de la sauvegarde des données réelles", e);
+  }
 }
 
 function wireEstimateSection(project) {

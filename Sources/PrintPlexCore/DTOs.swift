@@ -78,15 +78,23 @@ public struct PrintParamsDTO: Codable, Sendable, Equatable {
     public var material: String?
     public var estimatedTimeSec: Int?
     public var manualWorkLevel: String?
+    /// Measured after actually printing (real slicer output / a scale at the
+    /// printer) — takes priority over the geometry-based estimate for
+    /// display once set, since it's the real value rather than a guess.
+    public var actualPrintTimeSec: Int?
+    public var actualFilamentGrams: Double?
 
     public init(layerHeightMM: Double? = nil, nozzleTempC: Int? = nil, bedTempC: Int? = nil,
-                material: String? = nil, estimatedTimeSec: Int? = nil, manualWorkLevel: String? = nil) {
+                material: String? = nil, estimatedTimeSec: Int? = nil, manualWorkLevel: String? = nil,
+                actualPrintTimeSec: Int? = nil, actualFilamentGrams: Double? = nil) {
         self.layerHeightMM = layerHeightMM
         self.nozzleTempC = nozzleTempC
         self.bedTempC = bedTempC
         self.material = material
         self.estimatedTimeSec = estimatedTimeSec
         self.manualWorkLevel = manualWorkLevel
+        self.actualPrintTimeSec = actualPrintTimeSec
+        self.actualFilamentGrams = actualFilamentGrams
     }
 }
 

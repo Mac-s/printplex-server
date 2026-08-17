@@ -931,6 +931,9 @@ button.entity-row:hover { border-color: var(--accent); }
 .cost-row { display: flex; justify-content: space-between; font-size: 12px; padding: 2px 0; color: var(--text-muted); }
 .cost-row.total { font-weight: 600; color: var(--text); border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
 
+.actual-print-block { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }
+.actual-print-block .segmented { margin-top: 8px; }
+
 .detail-file-list { display: flex; flex-direction: column; }
 .detail-file-row {
   display: flex;

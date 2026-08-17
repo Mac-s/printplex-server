@@ -144,6 +144,19 @@ final class ServerTests: XCTestCase {
             XCTAssertEqual(file.printParams?.manualWorkLevel, "medium")
         }
 
+        // 4b-bis. Real/measured print data (from the "Impression réelle" block)
+        // persists alongside manualWorkLevel in the same printParams blob,
+        // without clobbering it.
+        try await app.test(.PATCH, "api/files/\(fileID)", beforeRequest: { req in
+            try req.content.encode(FileUpdateRequest(actualPrintTimeSec: 9000, actualFilamentGrams: 187.5))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            let file = try res.content.decode(FileDTO.self)
+            XCTAssertEqual(file.printParams?.actualPrintTimeSec, 9000)
+            XCTAssertEqual(file.printParams?.actualFilamentGrams, 187.5)
+            XCTAssertEqual(file.printParams?.manualWorkLevel, "medium", "unrelated field untouched")
+        })
+
         // 4c. "Already printed" is a manual flag, persisted like other metadata
         // (DB + info.json), and readable from both list and detail endpoints.
         try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in

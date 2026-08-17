@@ -11,11 +11,16 @@ struct FileKindCounts: Content {
     var unsorted: Int
 }
 
-/// Only `manualWorkLevel` is ever set from the UI (mirrors the macOS detail
-/// view's per-file difficulty picker) — the other PrintParams fields aren't
+/// `manualWorkLevel` mirrors the client's per-file difficulty picker.
+/// `actualPrintTimeSec`/`actualFilamentGrams` are the real, measured values
+/// (from the slicer once actually sliced, or a scale at the printer) —
+/// entered from the "Impression réelle" block, they take priority over the
+/// geometry-based estimate for display. The other PrintParams fields aren't
 /// user-editable anywhere yet.
 struct FileUpdateRequest: Content {
     var manualWorkLevel: String?
+    var actualPrintTimeSec: Int?
+    var actualFilamentGrams: Double?
 }
 
 struct FileController: RouteCollection {
@@ -84,9 +89,11 @@ struct FileController: RouteCollection {
     func update(req: Request) async throws -> FileDTO {
         let file = try await find(req)
         let body = try req.content.decode(FileUpdateRequest.self)
-        if let level = body.manualWorkLevel {
+        if body.manualWorkLevel != nil || body.actualPrintTimeSec != nil || body.actualFilamentGrams != nil {
             var params = file.printParams ?? PrintParamsDTO()
-            params.manualWorkLevel = level
+            if let level = body.manualWorkLevel { params.manualWorkLevel = level }
+            if let time = body.actualPrintTimeSec { params.actualPrintTimeSec = time }
+            if let grams = body.actualFilamentGrams { params.actualFilamentGrams = grams }
             file.printParams = params
         }
         try await file.save(on: req.db)

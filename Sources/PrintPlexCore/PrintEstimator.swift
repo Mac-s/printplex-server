@@ -254,8 +254,8 @@ public enum PrintEstimator {
         let build = [printer.buildX, printer.buildY, printer.buildZ].sorted(by: >)
         let fits  = zip(dims, build).allSatisfy { $0.0 <= $0.1 }
 
-        let filamentCost = (weightG / 1000.0) * material.pricePerKg
-        let timeCost     = Double(Int(ceil(totalSec))) / 3600.0 * 2.0  // 2 €/h
+        let costs = cost(filamentWeightG: weightG, printTimeSeconds: Int(ceil(totalSec)),
+                        material: material, manualWork: manualWork)
 
         return PrintEstimate(
             filamentLengthM:  lengthM,
@@ -265,10 +265,22 @@ public enum PrintEstimator {
             fitsOnBed:        fits,
             printerName:      printer.name,
             materialName:     material.name,
-            filamentCostEur:  filamentCost,
-            timeCostEur:      timeCost,
-            manualCostEur:    manualWork.cost
+            filamentCostEur:  costs.filamentCostEur,
+            timeCostEur:      costs.timeCostEur,
+            manualCostEur:    costs.manualCostEur
         )
+    }
+
+    /// Same €/kg and €/h formulas `estimate()` uses, exposed standalone so a
+    /// UI can recompute cost from real/measured values (actual print time,
+    /// actual filament weight) instead of the geometry-based estimate —
+    /// single source of truth for the cost rates either way.
+    public static func cost(filamentWeightG: Double, printTimeSeconds: Int,
+                            material: PrintMaterial, manualWork: ManualWorkLevel)
+    -> (filamentCostEur: Double, timeCostEur: Double, manualCostEur: Double) {
+        let filamentCost = (filamentWeightG / 1000.0) * material.pricePerKg
+        let timeCost     = Double(printTimeSeconds) / 3600.0 * 2.0  // 2 €/h
+        return (filamentCost, timeCost, manualWork.cost)
     }
 
     /// Combines per-file estimates into a project total.
