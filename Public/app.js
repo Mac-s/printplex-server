@@ -287,27 +287,26 @@ function projectHasCompleteMetadata(p) {
   return Boolean(p.category) && Boolean(p.creator && p.creator.length)
     && (p.suggestedMaterials || []).length > 0 && (p.tags || []).length > 0;
 }
-// Creators whose designs live on a scrapeable site — matched against
-// `project.creator` (case-insensitive) to offer the one-click import form.
-// relay.js (forgecore-scraper/) picks the actual scraper script from the
-// pasted URL's domain, independently of this — this map only drives the
-// dashboard's copy (label/placeholder/icon) and the "needs import" flag.
-const SOURCE_IMPORT_PRESETS = {
-  forgecore: { icon: "🔨", label: "ForgeCore", placeholder: "https://prinnit.com/ForgeCore/design/…" },
-  budwin: { icon: "🧊", label: "Budwin", placeholder: "https://makerworld.com/…/models/…" },
-};
+// The import block (see `sourceSectionHtml`) shows for every project
+// regardless of creator — dispatch to the right scraper happens in
+// relay.js, purely by the pasted URL's domain. This only picks a nicer
+// icon/label once a URL is known, cosmetic only; an unrecognized domain
+// still gets scraped-error feedback from relay.js ("Site non pris en
+// charge pour le moment"), not a client-side block here.
+function sourcePresetForUrl(url) {
+  let hostname;
+  try {
+    hostname = new URL(url).hostname;
+  } catch {
+    return null;
+  }
+  if (hostname.endsWith("prinnit.com")) return { icon: "🔨", label: "ForgeCore" };
+  if (hostname.endsWith("makerworld.com")) return { icon: "🧊", label: "MakerWorld" };
+  return null;
+}
 
-// Creator is filled in manually (e.g. when a design is downloaded straight
-// from the source site without running the scraper yet) — flag it as a
-// to-do until the scraper has actually run and filled in `sourceUrl`.
-function sourceImportPreset(p) {
-  return SOURCE_IMPORT_PRESETS[(p.creator || "").trim().toLowerCase()];
-}
-function needsSourceImport(p) {
-  return Boolean(sourceImportPreset(p)) && !p.sourceUrl;
-}
 function incompleteProjects() {
-  return state.projects.filter((p) => !projectHasCompleteMetadata(p) || needsSourceImport(p));
+  return state.projects.filter((p) => !projectHasCompleteMetadata(p));
 }
 function missingMetadataLabels(p) {
   const missing = [];
@@ -315,10 +314,6 @@ function missingMetadataLabels(p) {
   if (!p.creator || !p.creator.length) missing.push("Créateur");
   if (!(p.suggestedMaterials || []).length) missing.push("Matériaux");
   if (!(p.tags || []).length) missing.push("Tags");
-  if (needsSourceImport(p)) {
-    const preset = sourceImportPreset(p);
-    missing.push(`${preset.icon} Import ${preset.label}`);
-  }
   return missing;
 }
 function recentlyAdded() {
@@ -1455,20 +1450,18 @@ function sourceScrapeStatusHtml(project) {
 }
 
 function sourceSectionHtml(project) {
-  const awaitingImport = needsSourceImport(project);
-  if (!project.sourceUrl && !awaitingImport) return "";
-
-  // Not imported yet, but tagged as a known-source design — offer the
-  // one-click scrape trigger instead of the full (still empty) section below.
+  // Shown for every project, regardless of creator — relay.js dispatches to
+  // the right scraper purely from the pasted URL's domain (an unrecognized
+  // one just reports "Site non pris en charge pour le moment" back through
+  // the normal scrape-error path, see relay.js).
   if (!project.sourceUrl) {
-    const preset = sourceImportPreset(project);
     return `
       <div class="section">
-        <div class="section-title">${preset.icon} ${escapeHtml(preset.label)}</div>
+        <div class="section-title">🔗 Source</div>
         <div class="field" style="margin-bottom:6px">
           <label>Lien vers la fiche d'origine</label>
           <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
-            <input id="detailSourceUrlInput" style="flex:1; min-width:200px" placeholder="${escapeHtml(preset.placeholder)}" autocomplete="off" />
+            <input id="detailSourceUrlInput" style="flex:1; min-width:200px" placeholder="https://…" autocomplete="off" />
             <button class="btn btn-sm" id="btnSourceScrape" style="white-space:nowrap; flex-shrink:0">🔎 Lancer le scraping</button>
           </div>
         </div>
@@ -1476,7 +1469,7 @@ function sourceSectionHtml(project) {
       </div>`;
   }
 
-  const preset = sourceImportPreset(project) || { icon: "🔗", label: "Source" };
+  const preset = sourcePresetForUrl(project.sourceUrl) || { icon: "🔗", label: "Source" };
   const instructionFiles = sourceInstructionImageFiles(project);
   return `
     <div class="section">
