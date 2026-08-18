@@ -327,12 +327,6 @@ function recentlyAdded() {
     .slice(0, 12);
 }
 
-function allFilterValues(key) {
-  const cfg = FILTER_FIELDS[key];
-  const set = new Set();
-  for (const p of state.projects) for (const v of cfg.getValues(p)) set.add(v);
-  return [...set].sort((a, b) => a.localeCompare(b));
-}
 function projectsMatchingFilter(key, selectedSet) {
   const cfg = FILTER_FIELDS[key];
   if (selectedSet.size === 0) return state.projects;
@@ -343,19 +337,43 @@ function projectsMatchingFilter(key, selectedSet) {
       : values.some((v) => selectedSet.has(v));
   });
 }
+// Projects matching every OTHER active field's selection except `excludeKey`
+// — the candidate pool a field's own sidebar list/counts are computed
+// against, so picking Créateur=ForgeCore actually hides tags/categories that
+// no longer occur among ForgeCore projects (faceted-search style narrowing),
+// instead of each field only ever narrowing against itself.
+function projectsMatchingOtherFilters(excludeKey) {
+  let result = state.projects;
+  for (const key of Object.keys(FILTER_FIELDS)) {
+    if (key === excludeKey) continue;
+    const set = state.selected[key];
+    if (set.size === 0) continue;
+    const matchingIds = new Set(projectsMatchingFilter(key, set).map((p) => p.id));
+    result = result.filter((p) => matchingIds.has(p.id));
+  }
+  return result;
+}
 function visibleFilterValues(key) {
-  const all = allFilterValues(key);
-  const selected = state.selected[key];
-  if (selected.size === 0) return all;
-  const matching = projectsMatchingFilter(key, selected);
   const cfg = FILTER_FIELDS[key];
-  const reachable = new Set(matching.flatMap(cfg.getValues));
-  return all.filter((v) => selected.has(v) || reachable.has(v));
+  const candidates = projectsMatchingOtherFilters(key);
+  const reachable = new Set(candidates.flatMap(cfg.getValues));
+  // Already-selected values stay visible even if the rest of the current
+  // selection would otherwise hide them, so there's always a way to see —
+  // and deselect — what's currently picked.
+  for (const v of state.selected[key]) reachable.add(v);
+  return [...reachable].sort((a, b) => a.localeCompare(b));
 }
 function countForCandidate(key, value) {
+  const cfg = FILTER_FIELDS[key];
+  const candidates = projectsMatchingOtherFilters(key);
   const candidate = new Set(state.selected[key]);
   candidate.add(value);
-  return projectsMatchingFilter(key, candidate).length;
+  return candidates.filter((p) => {
+    const values = cfg.getValues(p);
+    return cfg.multivalued
+      ? [...candidate].every((v) => values.includes(v))
+      : values.some((v) => candidate.has(v));
+  }).length;
 }
 
 function matchShopifyProduct(projectName, explicitId) {
@@ -376,17 +394,6 @@ function matchShopifyProduct(projectName, explicitId) {
 function shopifyStatusOf(p) {
   const product = matchShopifyProduct(p.name, p.shopifyProductId);
   return product ? product.status : "none";
-}
-function projectsMatchingShopifyStatus(status) {
-  return state.projects.filter((p) => shopifyStatusOf(p) === status);
-}
-
-function projectsMatchingPrinted(printed) {
-  return state.projects.filter((p) => Boolean(p.alreadyPrinted) === printed);
-}
-
-function projectsMatchingEstimated(estimated) {
-  return state.projects.filter((p) => Boolean(p.hasManualEstimate) === estimated);
 }
 
 /// Inverse of the "none" Shopify filter: products that exist on Shopify but
@@ -474,6 +481,12 @@ function clearMultiFilter(key) {
   showGrid({ keepFilter: true });
 }
 
+function clearAllFilters() {
+  clearAllMultiSelects();
+  state.filter = { type: "all" };
+  showGrid({ keepFilter: true });
+}
+
 // ───────────────────────── Sidebar ─────────────────────────
 
 function groupHtml(id, title, bodyHtml) {
@@ -507,13 +520,24 @@ function renderSidebar() {
   }
   html += `</div>`;
 
+  // Static — always in the same spot, just disabled with nothing selected —
+  // rather than a per-group "Effacer la sélection" link, this resets every
+  // combinable field (Impression/Shopify/Categories/Tags/Materiaux/Createurs)
+  // in one tap.
+  html += `<button class="filter-clear-all" data-action="clearAll" ${anySelectionActive() ? "" : "disabled"}>✕ Effacer tous les filtres</button>`;
+
   // Impression — déjà imprimé / non imprimé, estimé manuellement / à estimer
   // (two independent fields, combinable with each other and the rest).
+  // Counts are narrowed by every OTHER active filter (Créateur, Tags, …) so
+  // they stay consistent with what's actually reachable, not just the
+  // field's own selection.
   if (state.projects.length > 0) {
-    const printedCount = projectsMatchingPrinted(true).length;
-    const notPrintedCount = projectsMatchingPrinted(false).length;
-    const estimatedCount = projectsMatchingEstimated(true).length;
-    const notEstimatedCount = projectsMatchingEstimated(false).length;
+    const printedCandidates = projectsMatchingOtherFilters("printed");
+    const estimatedCandidates = projectsMatchingOtherFilters("estimated");
+    const printedCount = printedCandidates.filter((p) => Boolean(p.alreadyPrinted)).length;
+    const notPrintedCount = printedCandidates.filter((p) => !p.alreadyPrinted).length;
+    const estimatedCount = estimatedCandidates.filter((p) => Boolean(p.hasManualEstimate)).length;
+    const notEstimatedCount = estimatedCandidates.filter((p) => !p.hasManualEstimate).length;
     let body = "";
     body += filterItemHtml({ icon: "✅", label: "Déjà imprimé", count: printedCount, active: state.selected.printed.has("printed"), action: "multi", key: "printed", value: "printed" });
     body += filterItemHtml({ icon: "⭕", label: "Non imprimé", count: notPrintedCount, active: state.selected.printed.has("not-printed"), action: "multi", key: "printed", value: "not-printed" });
@@ -529,11 +553,12 @@ function renderSidebar() {
   // projet" isn't a project attribute at all (it lists orphan Shopify
   // products, not projects) so it stays an exclusive full-page view.
   if (state.shopifyProducts.length > 0) {
+    const shopifyCandidates = projectsMatchingOtherFilters("shopify");
     const counts = {
-      active: projectsMatchingShopifyStatus("active").length,
-      draft: projectsMatchingShopifyStatus("draft").length,
-      archived: projectsMatchingShopifyStatus("archived").length,
-      none: projectsMatchingShopifyStatus("none").length,
+      active: shopifyCandidates.filter((p) => shopifyStatusOf(p) === "active").length,
+      draft: shopifyCandidates.filter((p) => shopifyStatusOf(p) === "draft").length,
+      archived: shopifyCandidates.filter((p) => shopifyStatusOf(p) === "archived").length,
+      none: shopifyCandidates.filter((p) => shopifyStatusOf(p) === "none").length,
     };
     let body = "";
     if (counts.active > 0) body += filterItemHtml({ icon: "✅", label: "En vente", count: counts.active, active: state.selected.shopify.has("active"), action: "multi", key: "shopify", value: "active" });
@@ -603,6 +628,7 @@ function wireSidebarEvents() {
       case "shopifyOrphans": setSingleFilter("shopifyOrphans"); break;
       case "multi": toggleMultiFilter(btn.dataset.key, btn.dataset.value); break;
       case "clear": clearMultiFilter(btn.dataset.key); break;
+      case "clearAll": clearAllFilters(); break;
     }
   });
   nav.addEventListener("contextmenu", (evt) => {
