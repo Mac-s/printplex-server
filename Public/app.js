@@ -258,6 +258,7 @@ async function loadLibrary() {
   state.projects = projects;
   state.unsorted = unsorted;
   state.fileStats = fileStats;
+  state.mediaPath = overview.mediaPath;
   state.shopifyConfigured = overview.shopifyConfigured;
   state.shopifyStoreDomain = overview.shopifyStoreDomain;
   // Only fetch the product list once a sync has actually happened — otherwise
@@ -1041,6 +1042,27 @@ const MANUAL_WORK_COST_EUR = { aucun: 0, easy: 5, medium: 10, hard: 25 };
 const VIEWABLE_KINDS = new Set(["stl", "threeMF", "obj"]);
 const ESTIMATE_PRINTER_KEY = "printplex_estimate_printer_id";
 const ESTIMATE_MATERIAL_KEY = "printplex_estimate_material_id";
+// Which real path on *this* machine the server's media root is mounted
+// under — inherently per-browser, not per-server: the same server viewed
+// from a Mac and a PC has a different answer, so this lives in localStorage
+// rather than in Réglages (was server-side before, see git history).
+const LOCAL_ROOT_PATH_KEY = "printplex_local_root_path";
+
+function localRootPath() {
+  return localStorage.getItem(LOCAL_ROOT_PATH_KEY) || "";
+}
+
+/// `folderPath` (only ever meaningful inside the container) with the
+/// server's media root prefix swapped for this browser's own local root —
+/// null whenever that's not set, or `folderPath` doesn't start with the
+/// server's media path.
+function computeLocalFolderPath(project) {
+  const root = localRootPath().trim();
+  if (!root || !state.mediaPath || !project.folderPath.startsWith(state.mediaPath)) return null;
+  const suffix = project.folderPath.slice(state.mediaPath.length);
+  const trimmedRoot = root.endsWith("/") ? root.slice(0, -1) : root;
+  return trimmedRoot + suffix;
+}
 
 // Per-project-detail-view transient UI state (which file is selected for
 // estimation, per-file manual-work picks, per-file plate picks for multi-plate
@@ -1640,12 +1662,13 @@ function wireImageStrip(project) {
 
 function actionsSectionHtml(project, modelParts) {
   const downloadableFiles = (project.files || []).filter((f) => f.fileRole !== "renderImage");
-  const pathButtonLabel = project.localFolderPath ? "📁 Ouvrir le dossier local" : "📁 Copier le chemin du dossier";
+  const localPath = computeLocalFolderPath(project);
+  const pathButtonLabel = localPath ? "📁 Ouvrir le dossier local" : "📁 Copier le chemin du dossier";
   return `
     <div class="section">
       <div class="section-title">Actions</div>
       <div class="actions-row">
-        <button class="btn btn-sm" id="btnCopyPath" title="${escapeHtml(project.localFolderPath || project.folderPath)}">${pathButtonLabel}</button>
+        <button class="btn btn-sm" id="btnCopyPath" title="${escapeHtml(localPath || project.folderPath)}">${pathButtonLabel}</button>
         ${modelParts.length ? `<button class="btn btn-sm" id="btnPreview3d">🧊 Visualiser en 3D</button>` : ""}
         ${downloadableFiles.length ? `<button class="btn btn-sm" id="btnDownloadParts">⬇ Télécharger les pièces</button>` : ""}
       </div>
@@ -1662,7 +1685,7 @@ function flashActionMessage(text, isError) {
 
 function wireActionsSection(project, modelParts) {
   document.getElementById("btnCopyPath")?.addEventListener("click", async () => {
-    const localPath = project.localFolderPath;
+    const localPath = computeLocalFolderPath(project);
     if (localPath) {
       // Best-effort: some browsers (notably Safari on macOS) hand a file://
       // directory link off to Finder; others just show a file listing in a
@@ -2215,8 +2238,8 @@ function renderLibraryTabHtml(overview) {
         <span class="value">${escapeHtml(overview.dataPath)}</span>
       </div>
       <div class="setting-row">
-        <div><div class="label">Chemin local</div><div class="hint">Chemin réel sur ta machine correspondant au répertoire média ci-dessus — permet au bouton "Ouvrir le dossier" d'un projet de pointer au bon endroit</div></div>
-        <input id="settingsLocalMediaPath" value="${escapeHtml(overview.localMediaPath ?? "")}" placeholder="ex. /Volumes/NAS/PrintPlex" style="max-width:280px" autocomplete="off" />
+        <div><div class="label">Chemin local</div><div class="hint">Chemin réel sur cette machine correspondant au répertoire média ci-dessus — permet au bouton "Ouvrir le dossier" d'un projet de pointer au bon endroit. Propre à ce navigateur : à régler séparément sur chaque machine utilisée pour consulter le tableau de bord.</div></div>
+        <input id="settingsLocalMediaPath" value="${escapeHtml(localRootPath())}" placeholder="ex. /Volumes/NAS/PrintPlex" style="max-width:280px" autocomplete="off" />
       </div>
     </div>
 
@@ -2289,19 +2312,14 @@ function wireLibraryTab(overview) {
   });
   document.getElementById("btnScanFromSettings").addEventListener("click", triggerScan);
 
+  // Per-browser (localStorage), not per-server — see LOCAL_ROOT_PATH_KEY.
+  // No debounce needed, it's an instant local write, no network round trip.
   const localPathInput = document.getElementById("settingsLocalMediaPath");
-  let localPathSaveTimer = null;
   const saveLocalPath = () => {
-    clearTimeout(localPathSaveTimer);
-    api("/api/settings/local-path", { method: "PATCH", body: JSON.stringify({ localMediaPath: localPathInput.value.trim() }) })
-      .then(() => { msg.innerHTML = `<div class="message ok">Enregistré.</div>`; })
-      .catch((e) => { msg.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`; });
+    localStorage.setItem(LOCAL_ROOT_PATH_KEY, localPathInput.value.trim());
+    msg.innerHTML = `<div class="message ok">Enregistré (sur cette machine).</div>`;
   };
-  localPathInput.addEventListener("input", () => {
-    clearTimeout(localPathSaveTimer);
-    localPathSaveTimer = setTimeout(saveLocalPath, 600);
-  });
-  localPathInput.addEventListener("blur", saveLocalPath);
+  localPathInput.addEventListener("input", saveLocalPath);
 }
 
 // ── Bibliothèques (Plex-style folder list, under the "Bibliothèque" tab) ──

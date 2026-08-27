@@ -15,12 +15,6 @@ final class AppSettingsModel: Model, @unchecked Sendable {
     @Field(key: "scan_interval_minutes") var scanIntervalMinutes: Int
     @OptionalField(key: "shopify_store_domain") var shopifyStoreDomain: String?
     @OptionalField(key: "shopify_access_token") var shopifyAccessToken: String?
-    /// The host path that PRINTPLEX_MEDIA_PATH (the container's media root)
-    /// is actually bind-mounted from — never known to the container itself,
-    /// so it's just a user-entered string used client-side to turn a
-    /// project's container path into one that means something on their own
-    /// machine (see ProjectController's `localFolderPath`).
-    @OptionalField(key: "local_media_path") var localMediaPath: String?
     /// The single admin account for the web dashboard — nil means no account
     /// exists yet (`AuthController`'s one-time `/api/auth/setup` route stays
     /// open until this is set). `adminPasswordHash` is a Bcrypt hash, never
