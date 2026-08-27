@@ -69,7 +69,7 @@ function filterValueLabel(key, value) {
 const FILE_KIND_LABELS = { stl: "STL", threeMF: "3MF", obj: "OBJ", step: "STEP" };
 const FILE_KIND_ICON = { stl: "🧊", threeMF: "🧊", obj: "🔄", step: "📐" };
 const FILE_ROLE_ICON = {
-  modelPart: "🧊", renderImage: "🖼️", document: "📄", slicerConfig: "⚙️", other: "📦",
+  modelPart: "🧊", renderImage: "🖼️", video: "🎬", document: "📄", slicerConfig: "⚙️", other: "📦",
 };
 const SHOPIFY_STATUS_LABEL = { active: "En vente", draft: "Brouillon", archived: "Archivé", none: "Non synchronisé" };
 
@@ -1595,21 +1595,21 @@ function wireSourceSection(project) {
   startSourceScrapePollingIfNeeded(project);
 }
 
-// ── Image gallery strip (natural aspect ratio, cover-setting via context menu) ──
+// ── Image/video gallery strip (natural aspect ratio, cover-setting via context menu) ──
 
 function imageStripHtml(project) {
   // Imported instruction images are `renderImage`-role files like any photo
   // — excluded here (shown in their own "ForgeCore" section instead) so they
   // don't get mixed into the product photo gallery or picked as the cover.
   const instructionNames = new Set(project.sourceInstructionImages || []);
-  const images = (project.files || []).filter((f) => {
-    if (f.fileRole !== "renderImage") return false;
+  const media = (project.files || []).filter((f) => {
+    if (f.fileRole !== "renderImage" && f.fileRole !== "video") return false;
     const bare = `${f.fileName}.${f.fileExtension}`;
     return !instructionNames.has(bare) && !instructionNames.has(relativeProjectPath(project, f));
   });
-  if (images.length === 0) return "";
+  if (media.length === 0) return "";
   const cover = project.coverImageFileName;
-  const ordered = [...images].sort((a, b) => {
+  const ordered = [...media].sort((a, b) => {
     const an = `${a.fileName}.${a.fileExtension}` === cover ? 0 : 1;
     const bn = `${b.fileName}.${b.fileExtension}` === cover ? 0 : 1;
     return an - bn;
@@ -1618,9 +1618,12 @@ function imageStripHtml(project) {
     <div class="image-strip" id="imageStrip">
       ${ordered.map((f) => {
         const fname = `${f.fileName}.${f.fileExtension}`;
-        const isCover = fname === cover;
-        return `<div class="image-strip-item ${isCover ? "is-cover" : ""}" data-file-id="${f.id}" data-filename="${escapeHtml(fname)}">
-          <img src="/api/files/${f.id}/original" onerror="this.closest('.image-strip-item').remove()" />
+        const isVideo = f.fileRole === "video";
+        const isCover = !isVideo && fname === cover;
+        return `<div class="image-strip-item ${isCover ? "is-cover" : ""}" data-file-id="${f.id}" data-filename="${escapeHtml(fname)}" ${isVideo ? 'data-role="video"' : ""}>
+          ${isVideo
+            ? `<video src="/api/files/${f.id}/original" controls preload="metadata" onerror="this.closest('.image-strip-item').remove()"></video>`
+            : `<img src="/api/files/${f.id}/original" onerror="this.closest('.image-strip-item').remove()" />`}
           ${isCover ? `<div class="cover-star" title="Image principale">⭐</div>` : ""}
         </div>`;
       }).join("")}
@@ -1632,7 +1635,9 @@ function wireImageStrip(project) {
   if (!strip) return;
   strip.addEventListener("contextmenu", (evt) => {
     const item = evt.target.closest(".image-strip-item");
-    if (!item) return;
+    // Videos can't be the cover — let the browser's own <video> context menu
+    // (save/playback speed/picture-in-picture) show instead of ours.
+    if (!item || item.dataset.role === "video") return;
     evt.preventDefault();
     closeContextMenu();
     const isCover = item.classList.contains("is-cover");
@@ -1661,7 +1666,7 @@ function wireImageStrip(project) {
 // ── Actions: web-honest equivalents of Finder / slicer launch / SceneKit ──
 
 function actionsSectionHtml(project, modelParts) {
-  const downloadableFiles = (project.files || []).filter((f) => f.fileRole !== "renderImage");
+  const downloadableFiles = (project.files || []).filter((f) => f.fileRole !== "renderImage" && f.fileRole !== "video");
   const localPath = computeLocalFolderPath(project);
   const pathButtonLabel = localPath ? "📁 Ouvrir le dossier local" : "📁 Copier le chemin du dossier";
   return `
@@ -1713,7 +1718,7 @@ function wireActionsSection(project, modelParts) {
   });
 
   document.getElementById("btnDownloadParts")?.addEventListener("click", (evt) => {
-    const downloadableFiles = (project.files || []).filter((f) => f.fileRole !== "renderImage");
+    const downloadableFiles = (project.files || []).filter((f) => f.fileRole !== "renderImage" && f.fileRole !== "video");
     openDropdownMenu(evt.currentTarget, [
       { label: "Tous les fichiers", onClick: () => downloadableFiles.forEach((f) => window.open(`/api/files/${f.id}/download`, "_blank")) },
       ...downloadableFiles.map((f) => ({

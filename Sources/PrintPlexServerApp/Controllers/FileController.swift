@@ -166,13 +166,15 @@ struct FileController: RouteCollection {
         throw Abort(.notFound, reason: "Pas de vignette pour ce type de fichier")
     }
 
-    /// Full-resolution image, streamed inline (no `Content-Disposition`) —
-    /// used only by the project detail view's main photo gallery.
+    /// Full-resolution image or video, streamed inline (no `Content-Disposition`)
+    /// — used by the project detail view's main gallery. `streamFile` handles
+    /// `Range` requests on its own, which is what lets a `<video>`/`AVPlayer`
+    /// seek without downloading the whole file first.
     @Sendable
     func original(req: Request) async throws -> Response {
         let file = try await find(req)
-        guard file.fileRole == .renderImage else {
-            throw Abort(.notFound, reason: "Pas une image")
+        guard file.fileRole == .renderImage || file.fileRole == .video else {
+            throw Abort(.notFound, reason: "Pas une image ni une vidéo")
         }
         let path = try MediaPath.safePath(for: file, in: req.application.appConfig)
         guard FileManager.default.fileExists(atPath: path) else {

@@ -231,6 +231,8 @@ final class LibraryScannerTests: XCTestCase {
         XCTAssertEqual(FileRole.from(extension: "stl"), .modelPart)
         XCTAssertEqual(FileRole.from(extension: "3mf"), .modelPart)
         XCTAssertEqual(FileRole.from(extension: "png"), .renderImage)
+        XCTAssertEqual(FileRole.from(extension: "mp4"), .video)
+        XCTAssertEqual(FileRole.from(extension: "MOV"), .video)
         XCTAssertEqual(FileRole.from(extension: "pdf"), .document)
         XCTAssertEqual(FileRole.from(extension: "gcode"), .slicerConfig)
         XCTAssertEqual(FileRole.from(extension: "json", fileName: "info"), .document)

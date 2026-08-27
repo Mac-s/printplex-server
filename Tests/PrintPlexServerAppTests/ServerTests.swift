@@ -449,8 +449,40 @@ final class ServerTests: XCTestCase {
         })
     }
 
-    /// Non-image files (a 3D model part here) have no "original photo" to
-    /// serve — `/original` is scoped to `renderImage` files only.
+    /// Videos belong in the gallery alongside photos — `/original` (the
+    /// route the gallery streams from, `Range`-request-capable via Vapor's
+    /// `streamFile`) must serve them too, not just `renderImage` files.
+    func testOriginalEndpointServesVideoFiles() async throws {
+        try await addLibrary()
+        let projectDir = mediaDir.appendingPathComponent("Groupe/VideoTest")
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        let sourceBytes = Data("not actually an mp4 but that's fine for this test".utf8)
+        try sourceBytes.write(to: projectDir.appendingPathComponent("clip.mp4"))
+        try Data(#"{"nom": "Video Test"}"#.utf8).write(to: projectDir.appendingPathComponent("info.json"))
+        try await app.test(.POST, "api/scan?wait=true")
+
+        var project: ProjectDTO?
+        try await app.test(.GET, "api/projects") { res async throws in
+            project = try res.content.decode([ProjectDTO].self).first { $0.name == "Video Test" }
+        }
+        let id = try XCTUnwrap(project?.id)
+        var fileId: UUID?
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let detail = try res.content.decode(ProjectDTO.self)
+            let file = try XCTUnwrap(detail.files).first { $0.fileName == "clip" }
+            XCTAssertEqual(file?.fileRole, .video)
+            fileId = file?.id
+        }
+        let videoId = try XCTUnwrap(fileId)
+
+        try await app.test(.GET, "api/files/\(videoId)/original", afterResponse: { res async in
+            XCTAssertEqual(res.status, .ok)
+            XCTAssertEqual(res.body.string, String(data: sourceBytes, encoding: .utf8))
+        })
+    }
+
+    /// Non-image, non-video files (a 3D model part here) have no gallery
+    /// media to serve — `/original` is scoped to `renderImage`/`video` files only.
     func testOriginalEndpointRejectsNonImageFiles() async throws {
         try await addLibrary()
         let projectDir = mediaDir.appendingPathComponent("Groupe/ModelOnly")

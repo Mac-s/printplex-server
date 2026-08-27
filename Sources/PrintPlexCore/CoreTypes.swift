@@ -30,6 +30,7 @@ public enum FileKind: String, Codable, CaseIterable, Identifiable, Sendable {
 public enum FileRole: String, Codable, CaseIterable, Identifiable, Sendable {
     case modelPart
     case renderImage
+    case video
     case document
     case slicerConfig
     case other
@@ -46,6 +47,8 @@ public enum FileRole: String, Codable, CaseIterable, Identifiable, Sendable {
             return .modelPart
         case "png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "tif", "heic":
             return .renderImage
+        case "mp4", "mov", "m4v", "webm":
+            return .video
         case "md", "txt", "pdf", "doc", "docx", "rtf":
             return .document
         case "gcode", "ini", "json", "curaprofile":
@@ -59,6 +62,7 @@ public enum FileRole: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .modelPart: return "Pièces 3D"
         case .renderImage: return "Rendus & images"
+        case .video: return "Vidéos"
         case .document: return "Documentation"
         case .slicerConfig: return "Configuration slicer"
         case .other: return "Autres fichiers"
@@ -70,6 +74,7 @@ public enum FileRole: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .modelPart: return "cube.fill"
         case .renderImage: return "photo"
+        case .video: return "video.fill"
         case .document: return "doc.text"
         case .slicerConfig: return "gearshape.2"
         case .other: return "doc"

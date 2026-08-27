@@ -763,7 +763,7 @@ button.entity-row:hover { border-color: var(--accent); }
   cursor: default;
 }
 .image-strip-item.is-cover { border-color: #e0a51a; }
-.image-strip-item img { height: 100%; width: auto; display: block; object-fit: contain; }
+.image-strip-item img, .image-strip-item video { height: 100%; width: auto; display: block; object-fit: contain; }
 .cover-star { position: absolute; top: 4px; right: 4px; font-size: 13px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
 
 .detail-metadata-row { display: flex; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
