@@ -1514,9 +1514,9 @@ function sourceSectionHtml(project) {
       ${instructionFiles.length ? `
         <div class="chip-editor">
           <label>📋 Instructions de montage</label>
-          <div class="image-strip">
+          <div class="image-strip" id="instructionImagesStrip">
             ${instructionFiles.map((f) => `
-              <div class="image-strip-item">
+              <div class="image-strip-item" data-file-id="${f.id}" style="cursor:pointer">
                 <img src="/api/files/${f.id}/thumbnail" onerror="this.closest('.image-strip-item').remove()" />
               </div>`).join("")}
           </div>
@@ -1592,28 +1592,100 @@ function wireSourceSection(project) {
     }
   }
 
+  const instructionStrip = document.getElementById("instructionImagesStrip");
+  if (instructionStrip) {
+    const instructionFiles = sourceInstructionImageFiles(project);
+    const lightboxItems = instructionFiles.map((f) => ({ kind: "image", url: `/api/files/${f.id}/original` }));
+    instructionStrip.addEventListener("click", (evt) => {
+      const item = evt.target.closest(".image-strip-item");
+      if (!item) return;
+      const index = instructionFiles.findIndex((f) => f.id === item.dataset.fileId);
+      if (index >= 0) openLightbox(lightboxItems, index);
+    });
+  }
+
   startSourceScrapePollingIfNeeded(project);
+}
+
+// ── Fullscreen lightbox — shared by the main gallery strip and the
+// "Instructions de montage" strip in the Source section, so both get
+// click-to-enlarge with left/right navigation between that strip's own items. ──
+
+function openLightbox(items, startIndex) {
+  if (!items.length) return;
+  let index = Math.min(Math.max(startIndex, 0), items.length - 1);
+
+  const overlay = document.createElement("div");
+  overlay.className = "lightbox-overlay";
+  overlay.innerHTML = `
+    <button class="lightbox-close" aria-label="Fermer">✕</button>
+    ${items.length > 1 ? `
+      <button class="lightbox-nav lightbox-prev" aria-label="Précédent">‹</button>
+      <button class="lightbox-nav lightbox-next" aria-label="Suivant">›</button>
+      <div class="lightbox-counter"></div>` : ""}
+    <div class="lightbox-content"></div>`;
+  document.body.appendChild(overlay);
+
+  const content = overlay.querySelector(".lightbox-content");
+  const counter = overlay.querySelector(".lightbox-counter");
+
+  function render() {
+    const item = items[index];
+    content.innerHTML = item.kind === "video"
+      ? `<video src="${item.url}" controls autoplay></video>`
+      : `<img src="${item.url}" />`;
+    if (counter) counter.textContent = `${index + 1} / ${items.length}`;
+  }
+  function close() {
+    document.removeEventListener("keydown", onKeydown);
+    overlay.remove();
+  }
+  function go(delta) {
+    index = (index + delta + items.length) % items.length;
+    render();
+  }
+  function onKeydown(evt) {
+    if (evt.key === "Escape") close();
+    else if (evt.key === "ArrowLeft") go(-1);
+    else if (evt.key === "ArrowRight") go(1);
+  }
+
+  overlay.querySelector(".lightbox-close").addEventListener("click", close);
+  overlay.querySelector(".lightbox-prev")?.addEventListener("click", () => go(-1));
+  overlay.querySelector(".lightbox-next")?.addEventListener("click", () => go(1));
+  // Only the backdrop itself closes it — clicking the image/video shouldn't.
+  overlay.addEventListener("click", (evt) => { if (evt.target === overlay) close(); });
+  document.addEventListener("keydown", onKeydown);
+
+  render();
 }
 
 // ── Image/video gallery strip (natural aspect ratio, cover-setting via context menu) ──
 
-function imageStripHtml(project) {
-  // Imported instruction images are `renderImage`-role files like any photo
-  // — excluded here (shown in their own "ForgeCore" section instead) so they
-  // don't get mixed into the product photo gallery or picked as the cover.
+// Imported instruction images are `renderImage`-role files like any photo —
+// excluded here (shown in their own "Source" section strip instead) so they
+// don't get mixed into the product photo gallery or picked as the cover.
+// Shared between `imageStripHtml` (rendering) and `wireImageStrip` (the
+// lightbox's item list) so the two never drift out of sync with each other.
+function galleryMediaFiles(project) {
   const instructionNames = new Set(project.sourceInstructionImages || []);
   const media = (project.files || []).filter((f) => {
     if (f.fileRole !== "renderImage" && f.fileRole !== "video") return false;
     const bare = `${f.fileName}.${f.fileExtension}`;
     return !instructionNames.has(bare) && !instructionNames.has(relativeProjectPath(project, f));
   });
-  if (media.length === 0) return "";
   const cover = project.coverImageFileName;
-  const ordered = [...media].sort((a, b) => {
+  return [...media].sort((a, b) => {
     const an = `${a.fileName}.${a.fileExtension}` === cover ? 0 : 1;
     const bn = `${b.fileName}.${b.fileExtension}` === cover ? 0 : 1;
     return an - bn;
   });
+}
+
+function imageStripHtml(project) {
+  const ordered = galleryMediaFiles(project);
+  if (ordered.length === 0) return "";
+  const cover = project.coverImageFileName;
   return `
     <div class="image-strip" id="imageStrip">
       ${ordered.map((f) => {
@@ -1633,6 +1705,23 @@ function imageStripHtml(project) {
 function wireImageStrip(project) {
   const strip = document.getElementById("imageStrip");
   if (!strip) return;
+
+  // Videos already get a fullscreen button for free from the browser's own
+  // <video controls> — only images open our lightbox, clicking a video plays/
+  // pauses it in place like any native player.
+  const media = galleryMediaFiles(project);
+  const lightboxItems = media.map((f) => ({
+    kind: f.fileRole === "video" ? "video" : "image",
+    url: `/api/files/${f.id}/original`,
+  }));
+  strip.addEventListener("click", (evt) => {
+    if (evt.target.tagName === "VIDEO") return;
+    const item = evt.target.closest(".image-strip-item");
+    if (!item || item.dataset.role === "video") return;
+    const index = media.findIndex((f) => f.id === item.dataset.fileId);
+    if (index >= 0) openLightbox(lightboxItems, index);
+  });
+
   strip.addEventListener("contextmenu", (evt) => {
     const item = evt.target.closest(".image-strip-item");
     // Videos can't be the cover — let the browser's own <video> context menu
