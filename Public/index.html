@@ -8,6 +8,7 @@
 </head>
 <body>
 <header class="topbar">
+  <button class="btn" id="btnMobileMenu" aria-label="Menu">☰</button>
   <div class="brand">
     <span class="brand-icon">🧊</span>
     <span class="brand-name">PrintPlex</span>
@@ -27,7 +28,8 @@
 </header>
 
 <div class="layout">
-  <aside class="sidebar">
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <aside class="sidebar" id="sidebar">
     <div class="sidebar-scroll">
       <nav class="filter-nav" id="filterNav"></nav>
       <div class="scan-log" id="scanLog"><div class="empty">En attente d'évènements…</div></div>

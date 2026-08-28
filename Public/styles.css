@@ -66,6 +66,13 @@ button, input, select, textarea { font-family: inherit; font-size: 14px; }
   .search { display: none; }
 }
 
+/* Hamburger toggle for the sidebar drawer — hidden on desktop, where the
+   sidebar is always visible as a normal column (see .sidebar below). */
+#btnMobileMenu { display: none; }
+@media (max-width: 860px) {
+  #btnMobileMenu { display: inline-flex; }
+}
+
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .brand-icon { font-size: 20px; }
 .brand-tag { color: var(--text-muted); font-weight: 400; font-size: 13px; }
@@ -147,6 +154,61 @@ button, input, select, textarea { font-family: inherit; font-size: 14px; }
 }
 
 .sidebar-scroll { padding: 12px 10px 24px; }
+
+.sidebar-backdrop { display: none; }
+
+/* Below this width the sidebar can't sit next to the content without
+   squeezing it into a sliver — it becomes a slide-in drawer instead
+   (toggled via #btnMobileMenu, closed by the backdrop, an Effacer/filter
+   tap, or picking a project — see wireSidebarEvents/closeMobileSidebar). */
+@media (max-width: 860px) {
+  .sidebar {
+    position: fixed;
+    top: 53px;
+    left: 0;
+    width: 82vw;
+    max-width: 300px;
+    height: calc(100vh - 53px);
+    background: var(--bg-elevated);
+    border-right: 1px solid var(--border);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, .25);
+    transform: translateX(-100%);
+    transition: transform .2s ease;
+    z-index: 60;
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 53px 0 0 0;
+    background: rgba(0, 0, 0, .4);
+    z-index: 55;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+  }
+  .sidebar-backdrop.visible { opacity: 1; pointer-events: auto; }
+}
+
+@media (max-width: 680px) {
+  /* 32px of horizontal padding either side is a lot to give up on a
+     ~375px-wide phone. */
+  .detail { padding: 16px; }
+
+  /* Settings rows pair a label+hint with a value/input via
+     justify-content: space-between on one line — on a narrow screen that
+     squeezes both sides too hard (monospace paths, long hint text), so let
+     them stack instead. */
+  .setting-row { flex-wrap: wrap; }
+  .setting-row .value { max-width: 100%; text-align: left; }
+
+  /* Five tabs (Bibliothèque/Matériel/Shopify/Compte/À propos) don't fit a
+     phone's width without shrinking to illegibility — scroll horizontally
+     instead of wrapping into a second row that pushes content down. */
+  .settings-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .settings-tab { flex-shrink: 0; }
+}
 
 .filter-group { margin-bottom: 2px; }
 

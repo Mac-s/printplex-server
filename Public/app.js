@@ -609,6 +609,17 @@ function toggleGroupCollapse(id) {
   renderSidebar();
 }
 
+// ── Mobile sidebar drawer (desktop ignores these — .sidebar/.open only does
+// anything under the 860px breakpoint in styles.css) ──
+function closeMobileSidebar() {
+  document.getElementById("sidebar")?.classList.remove("open");
+  document.getElementById("sidebarBackdrop")?.classList.remove("visible");
+}
+function toggleMobileSidebar() {
+  document.getElementById("sidebar")?.classList.toggle("open");
+  document.getElementById("sidebarBackdrop")?.classList.toggle("visible");
+}
+
 function wireSidebarEvents() {
   const nav = document.getElementById("filterNav");
   nav.addEventListener("click", (evt) => {
@@ -626,6 +637,9 @@ function wireSidebarEvents() {
       case "clear": clearMultiFilter(btn.dataset.key); break;
       case "clearAll": clearAllFilters(); break;
     }
+    // Any of the above navigates somewhere — on the mobile drawer, reveal
+    // the result instead of leaving the sidebar covering it.
+    closeMobileSidebar();
   });
   nav.addEventListener("contextmenu", (evt) => {
     const btn = evt.target.closest('[data-action="multi"][data-rename="1"]');
@@ -3236,7 +3250,9 @@ function handleSessionExpired() {
 
 async function boot() {
   document.getElementById("btnScan").addEventListener("click", triggerScan);
-  document.getElementById("btnSettings").addEventListener("click", () => openSettings());
+  document.getElementById("btnSettings").addEventListener("click", () => { closeMobileSidebar(); openSettings(); });
+  document.getElementById("btnMobileMenu").addEventListener("click", toggleMobileSidebar);
+  document.getElementById("sidebarBackdrop").addEventListener("click", closeMobileSidebar);
   document.getElementById("searchInput").addEventListener("input", (evt) => {
     state.searchText = evt.target.value;
     if (state.view === "grid") renderGrid();
