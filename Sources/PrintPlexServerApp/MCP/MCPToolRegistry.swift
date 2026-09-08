@@ -6,9 +6,11 @@ import MCP
 enum MCPToolRegistry {
     static let toolGroups: [[Tool]] = [
         ProjectMCPTools.tools,
+        FileMCPTools.tools,
     ]
     static let callHandlers: [@Sendable (String, [String: Value]?, Application) async throws -> CallTool.Result?] = [
         ProjectMCPTools.call,
+        FileMCPTools.call,
     ]
 
     static var allTools: [Tool] { toolGroups.flatMap { $0 } }

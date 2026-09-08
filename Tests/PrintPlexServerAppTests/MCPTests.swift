@@ -115,4 +115,10 @@ final class MCPTests: XCTestCase {
         XCTAssertTrue(res.body.string.contains("\"isError\":true"))
         XCTAssertTrue(res.body.string.contains("Projet introuvable"))
     }
+
+    func testListFilesToolReturnsEmptyArrayWhenNoFiles() async throws {
+        let res = try await callTool("list_files")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+    }
 }

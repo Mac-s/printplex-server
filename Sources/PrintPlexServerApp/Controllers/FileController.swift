@@ -39,15 +39,16 @@ struct FileController: RouteCollection {
         }
     }
 
-    /// Flat file listing across the whole library (all projects + unsorted),
-    /// optionally filtered by kind — backs the sidebar's "Types 3D" section,
-    /// which (like the macOS app's equivalent list) shows files without their
-    /// project context.
     @Sendable
     func index(req: Request) async throws -> [FileDTO] {
-        var query = FileModel.query(on: req.db)
-        if let kindRaw = try? req.query.get(String.self, at: "kind"), !kindRaw.isEmpty {
-            query = query.filter(\.$kindRaw == kindRaw)
+        let kind = try? req.query.get(String.self, at: "kind")
+        return try await Self.fetchIndex(kind: kind, on: req.db)
+    }
+
+    static func fetchIndex(kind: String?, on db: Database) async throws -> [FileDTO] {
+        var query = FileModel.query(on: db)
+        if let kind, !kind.isEmpty {
+            query = query.filter(\.$kindRaw == kind)
         }
         let models = try await query.sort(\.$fileName).all()
         return models.map { $0.toDTO() }
@@ -55,23 +56,29 @@ struct FileController: RouteCollection {
 
     @Sendable
     func unsorted(req: Request) async throws -> [FileDTO] {
-        let models = try await FileModel.query(on: req.db)
+        try await Self.fetchUnsorted(on: req.db)
+    }
+
+    static func fetchUnsorted(on db: Database) async throws -> [FileDTO] {
+        let models = try await FileModel.query(on: db)
             .filter(\.$project.$id == .null)
             .sort(\.$fileName)
             .all()
         return models.map { $0.toDTO() }
     }
 
-    /// Counts backing the sidebar badges — kept as a single aggregate query
-    /// rather than making the client fetch every file just to count them.
     @Sendable
     func stats(req: Request) async throws -> FileKindCounts {
-        async let stl = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.stl.rawValue).count()
-        async let threeMF = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.threeMF.rawValue).count()
-        async let obj = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.obj.rawValue).count()
-        async let step = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.step.rawValue).count()
-        async let other = FileModel.query(on: req.db).filter(\.$kindRaw == FileKind.other.rawValue).count()
-        async let unsorted = FileModel.query(on: req.db).filter(\.$project.$id == .null).count()
+        try await Self.fetchStats(on: req.db)
+    }
+
+    static func fetchStats(on db: Database) async throws -> FileKindCounts {
+        async let stl = FileModel.query(on: db).filter(\.$kindRaw == FileKind.stl.rawValue).count()
+        async let threeMF = FileModel.query(on: db).filter(\.$kindRaw == FileKind.threeMF.rawValue).count()
+        async let obj = FileModel.query(on: db).filter(\.$kindRaw == FileKind.obj.rawValue).count()
+        async let step = FileModel.query(on: db).filter(\.$kindRaw == FileKind.step.rawValue).count()
+        async let other = FileModel.query(on: db).filter(\.$kindRaw == FileKind.other.rawValue).count()
+        async let unsorted = FileModel.query(on: db).filter(\.$project.$id == .null).count()
         return try await FileKindCounts(
             stl: stl, threeMF: threeMF, obj: obj, step: step, other: other, unsorted: unsorted
         )
@@ -89,6 +96,10 @@ struct FileController: RouteCollection {
     func update(req: Request) async throws -> FileDTO {
         let file = try await find(req)
         let body = try req.content.decode(FileUpdateRequest.self)
+        return try await Self.applyUpdate(body, to: file, on: req.db)
+    }
+
+    static func applyUpdate(_ body: FileUpdateRequest, to file: FileModel, on db: Database) async throws -> FileDTO {
         if body.manualWorkLevel != nil || body.actualPrintTimeSec != nil || body.actualFilamentGrams != nil {
             var params = file.printParams ?? PrintParamsDTO()
             if let level = body.manualWorkLevel { params.manualWorkLevel = level }
@@ -96,7 +107,7 @@ struct FileController: RouteCollection {
             if let grams = body.actualFilamentGrams { params.actualFilamentGrams = grams }
             file.printParams = params
         }
-        try await file.save(on: req.db)
+        try await file.save(on: db)
         return file.toDTO()
     }
 
@@ -188,10 +199,14 @@ struct FileController: RouteCollection {
     func estimate(req: Request) async throws -> PrintEstimate {
         let file = try await find(req)
         let query = try req.query.decode(EstimateQuery.self)
+        return try await Self.fetchEstimate(file: file, query: query, on: req.db)
+    }
+
+    static func fetchEstimate(file: FileModel, query: EstimateQuery, on db: Database) async throws -> PrintEstimate {
         guard let stats = EstimateSupport.meshStats(for: file, plateIndex: query.plateIndex) else {
             throw Abort(.conflict, reason: "Pas de statistiques de maillage — lancez un scan d'abord")
         }
-        let (printer, material, settings, manual) = try await EstimateSupport.inputs(from: req)
+        let (printer, material, settings, manual) = try await EstimateSupport.inputs(query: query, on: db)
         return PrintEstimator.estimate(
             parsed: EstimateSupport.parserResult(from: stats),
             printer: printer, material: material,
@@ -202,10 +217,20 @@ struct FileController: RouteCollection {
     // MARK: - Helpers
 
     private func find(_ req: Request) async throws -> FileModel {
-        guard let id = req.parameters.get("fileID", as: UUID.self),
-              let model = try await FileModel.find(id, on: req.db) else {
+        try await Self.find(id: requireFileID(req), on: req.db)
+    }
+
+    static func find(id: UUID, on db: Database) async throws -> FileModel {
+        guard let model = try await FileModel.find(id, on: db) else {
             throw Abort(.notFound, reason: "Fichier introuvable")
         }
         return model
+    }
+
+    private func requireFileID(_ req: Request) throws -> UUID {
+        guard let id = req.parameters.get("fileID", as: UUID.self) else {
+            throw Abort(.notFound, reason: "Fichier introuvable")
+        }
+        return id
     }
 }
