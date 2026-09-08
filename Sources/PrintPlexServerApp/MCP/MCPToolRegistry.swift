@@ -4,8 +4,12 @@ import MCP
 /// Each controller-group's `*MCPTools.swift` file appends its own
 /// `.tools`/`.call` to these two arrays — see Task 3 onward.
 enum MCPToolRegistry {
-    static let toolGroups: [[Tool]] = []
-    static let callHandlers: [@Sendable (String, [String: Value]?, Application) async throws -> CallTool.Result?] = []
+    static let toolGroups: [[Tool]] = [
+        ProjectMCPTools.tools,
+    ]
+    static let callHandlers: [@Sendable (String, [String: Value]?, Application) async throws -> CallTool.Result?] = [
+        ProjectMCPTools.call,
+    ]
 
     static var allTools: [Tool] { toolGroups.flatMap { $0 } }
 

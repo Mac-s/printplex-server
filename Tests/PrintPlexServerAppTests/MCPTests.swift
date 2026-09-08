@@ -85,14 +85,14 @@ final class MCPTests: XCTestCase {
         })
     }
 
-    func testToolsListReturnsEmptyArrayBeforeAnyGroupIsRegistered() async throws {
+    func testToolsListReturnsRegisteredProjectTools() async throws {
         try await app.test(.POST, "api/mcp", beforeRequest: { req in
             req.headers.replaceOrAdd(name: "Content-Type", value: "application/json")
             req.headers.replaceOrAdd(name: "Accept", value: "application/json")
             req.body = try rpc(["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
         }, afterResponse: { res async throws in
             XCTAssertEqual(res.status, .ok)
-            XCTAssertTrue(res.body.string.contains("\"tools\":[]"))
+            XCTAssertTrue(res.body.string.contains("\"list_projects\""))
         })
     }
 
@@ -100,5 +100,19 @@ final class MCPTests: XCTestCase {
         let res = try await callTool("nonexistent_tool")
         XCTAssertEqual(res.status, .ok)
         XCTAssertTrue(res.body.string.contains("\"isError\":true"))
+    }
+
+    func testListProjectsToolReturnsEmptyArrayWhenNoProjects() async throws {
+        let res = try await callTool("list_projects")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":[]"))
+    }
+
+    func testGetProjectToolReturns404ForUnknownId() async throws {
+        let res = try await callTool("get_project", arguments: ["projectId": UUID().uuidString])
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertTrue(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("Projet introuvable"))
     }
 }

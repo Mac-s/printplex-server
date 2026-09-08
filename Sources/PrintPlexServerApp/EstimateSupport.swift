@@ -19,13 +19,16 @@ enum EstimateSupport {
     /// to the first configured one (by sortOrder) when none is specified.
     static func inputs(from req: Request) async throws
         -> (PrinterProfile, PrintMaterial, PrintSettings, ManualWorkLevel) {
-        let query = try req.query.decode(EstimateQuery.self)
+        try await inputs(query: try req.query.decode(EstimateQuery.self), on: req.db)
+    }
 
+    static func inputs(query: EstimateQuery, on db: Database) async throws
+        -> (PrinterProfile, PrintMaterial, PrintSettings, ManualWorkLevel) {
         let printerModel: PrinterModel?
         if let id = query.printerId {
-            printerModel = try await PrinterModel.find(id, on: req.db)
+            printerModel = try await PrinterModel.find(id, on: db)
         } else {
-            printerModel = try await PrinterModel.query(on: req.db).sort(\.$sortOrder).first()
+            printerModel = try await PrinterModel.query(on: db).sort(\.$sortOrder).first()
         }
         guard let printerModel else {
             throw Abort(.notFound, reason: "Imprimante inconnue")
@@ -33,9 +36,9 @@ enum EstimateSupport {
 
         let materialModel: MaterialModel?
         if let id = query.materialId {
-            materialModel = try await MaterialModel.find(id, on: req.db)
+            materialModel = try await MaterialModel.find(id, on: db)
         } else {
-            materialModel = try await MaterialModel.query(on: req.db).sort(\.$sortOrder).first()
+            materialModel = try await MaterialModel.query(on: db).sort(\.$sortOrder).first()
         }
         guard let materialModel else {
             throw Abort(.notFound, reason: "Matériau inconnu")

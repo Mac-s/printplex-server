@@ -42,14 +42,18 @@ struct ProjectController: RouteCollection {
 
     @Sendable
     func index(req: Request) async throws -> [ProjectDTO] {
-        let models = try await ProjectModel.query(on: req.db)
+        try await Self.fetchIndex(on: req.db)
+    }
+
+    static func fetchIndex(on db: Database) async throws -> [ProjectDTO] {
+        let models = try await ProjectModel.query(on: db)
             .sort(\.$lastModifiedAt, .descending)
             .all()
 
         // One query for every project's files (instead of one query per
         // project) so cover image + part/file counts stay cheap even with
         // many projects — the grid view needs these on every card.
-        let allProjectFiles = try await FileModel.query(on: req.db)
+        let allProjectFiles = try await FileModel.query(on: db)
             .filter(\.$project.$id != nil)
             .all()
         let filesByProject = Dictionary(grouping: allProjectFiles) { $0.$project.id! }
@@ -65,8 +69,12 @@ struct ProjectController: RouteCollection {
 
     @Sendable
     func detail(req: Request) async throws -> ProjectDTO {
-        let model = try await find(req)
-        let files = try await FileModel.query(on: req.db)
+        try await Self.fetchDetail(id: requireProjectID(req), on: req.db)
+    }
+
+    static func fetchDetail(id: UUID, on db: Database) async throws -> ProjectDTO {
+        let model = try await find(id: id, on: db)
+        let files = try await FileModel.query(on: db)
             .filter(\.$project.$id == model.requireID())
             .sort(\.$fileName)
             .all()
@@ -82,7 +90,10 @@ struct ProjectController: RouteCollection {
     func update(req: Request) async throws -> ProjectDTO {
         let model = try await find(req)
         let body = try req.content.decode(ProjectUpdateRequest.self)
+        return try await Self.applyUpdate(body, to: model, on: req.db)
+    }
 
+    static func applyUpdate(_ body: ProjectUpdateRequest, to model: ProjectModel, on db: Database) async throws -> ProjectDTO {
         // `String?` can't distinguish "field omitted" from "explicitly cleared"
         // over JSON — both decode to nil. So for category/creator, an empty
         // string is the client's way of asking to clear the field (the "À
@@ -107,7 +118,7 @@ struct ProjectController: RouteCollection {
         if let v = body.sourceScrapeError { model.sourceScrapeError = v.isEmpty ? nil : v }
         if let v = body.shopifyProductId { model.shopifyProductId = v }
         if let v = body.coverImageFileName { model.coverImageFileName = v }
-        try await model.save(on: req.db)
+        try await model.save(on: db)
 
         try LibraryScanner.updateProjectInfo(in: model.folderPath) { info in
             if let v = body.name { info.nom = v }
@@ -134,12 +145,18 @@ struct ProjectController: RouteCollection {
     /// Combined estimate over every 3MF part that has parsed mesh stats.
     @Sendable
     func estimate(req: Request) async throws -> PrintEstimate {
-        let model = try await find(req)
-        let files = try await FileModel.query(on: req.db)
+        let id = try requireProjectID(req)
+        let query = try req.query.decode(EstimateQuery.self)
+        return try await Self.fetchEstimate(id: id, query: query, on: req.db)
+    }
+
+    static func fetchEstimate(id: UUID, query: EstimateQuery, on db: Database) async throws -> PrintEstimate {
+        let model = try await find(id: id, on: db)
+        let files = try await FileModel.query(on: db)
             .filter(\.$project.$id == model.requireID())
             .all()
 
-        let (printer, material, settings, manual) = try await EstimateSupport.inputs(from: req)
+        let (printer, material, settings, manual) = try await EstimateSupport.inputs(query: query, on: db)
 
         let estimates = files.compactMap { file -> PrintEstimate? in
             guard file.fileRole == .modelPart, let stats = file.meshStats else { return nil }
@@ -171,10 +188,14 @@ struct ProjectController: RouteCollection {
 
     @Sendable
     func shopifyMatch(req: Request) async throws -> ShopifyMatchResponse {
-        guard let cache = req.application.shopifyCache else {
+        try await Self.fetchShopifyMatch(id: requireProjectID(req), app: req.application)
+    }
+
+    static func fetchShopifyMatch(id: UUID, app: Application) async throws -> ShopifyMatchResponse {
+        guard let cache = app.shopifyCache else {
             throw Abort(.serviceUnavailable, reason: "Shopify non configuré (SHOPIFY_STORE_DOMAIN / SHOPIFY_ACCESS_TOKEN)")
         }
-        let model = try await find(req)
+        let model = try await find(id: id, on: app.db)
         do {
             _ = try await cache.productsSyncingIfNeeded()
         } catch {
@@ -189,10 +210,20 @@ struct ProjectController: RouteCollection {
     }
 
     private func find(_ req: Request) async throws -> ProjectModel {
-        guard let id = req.parameters.get("projectID", as: UUID.self),
-              let model = try await ProjectModel.find(id, on: req.db) else {
+        try await Self.find(id: requireProjectID(req), on: req.db)
+    }
+
+    static func find(id: UUID, on db: Database) async throws -> ProjectModel {
+        guard let model = try await ProjectModel.find(id, on: db) else {
             throw Abort(.notFound, reason: "Projet introuvable")
         }
         return model
+    }
+
+    private func requireProjectID(_ req: Request) throws -> UUID {
+        guard let id = req.parameters.get("projectID", as: UUID.self) else {
+            throw Abort(.notFound, reason: "Projet introuvable")
+        }
+        return id
     }
 }
