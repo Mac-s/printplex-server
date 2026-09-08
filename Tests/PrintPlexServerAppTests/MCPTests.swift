@@ -140,4 +140,15 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(res.status, .ok)
         XCTAssertTrue(res.body.string.contains("\"isError\":true"))
     }
+
+    func testCreatePrinterToolPersistsPrinter() async throws {
+        let res = try await callTool("create_printer", arguments: [
+            "name": "Test Printer", "buildX": 220, "buildY": 220, "buildZ": 250,
+            "perimeterSpeedMMPS": 40, "infillSpeedMMPS": 80, "nozzleDiameterMM": 0.4,
+            "defaultLayerHeightMM": 0.2, "supportsPercent": 10, "purgePercent": 5, "speedEfficiency": 0.85,
+        ])
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("Test Printer"))
+    }
 }

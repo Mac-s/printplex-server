@@ -45,13 +45,21 @@ struct PrinterController: RouteCollection {
 
     @Sendable
     func index(req: Request) async throws -> [PrinterProfile] {
-        try await PrinterModel.query(on: req.db).sort(\.$sortOrder).all().map { $0.toDTO() }
+        try await Self.fetchIndex(on: req.db)
+    }
+
+    static func fetchIndex(on db: Database) async throws -> [PrinterProfile] {
+        try await PrinterModel.query(on: db).sort(\.$sortOrder).all().map { $0.toDTO() }
     }
 
     @Sendable
     func create(req: Request) async throws -> PrinterProfile {
         let body = try req.content.decode(PrinterUpsertRequest.self)
-        let maxOrder = try await PrinterModel.query(on: req.db).max(\.$sortOrder) ?? -1
+        return try await Self.createPrinter(body, on: req.db)
+    }
+
+    static func createPrinter(_ body: PrinterUpsertRequest, on db: Database) async throws -> PrinterProfile {
+        let maxOrder = try await PrinterModel.query(on: db).max(\.$sortOrder) ?? -1
 
         let model = PrinterModel()
         model.id = UUID()
@@ -67,7 +75,7 @@ struct PrinterController: RouteCollection {
         model.purgePercent = body.purgePercent
         model.speedEfficiency = body.speedEfficiency
         model.sortOrder = maxOrder + 1
-        try await model.save(on: req.db)
+        try await model.save(on: db)
         return model.toDTO()
     }
 
@@ -75,7 +83,10 @@ struct PrinterController: RouteCollection {
     func update(req: Request) async throws -> PrinterProfile {
         let model = try await find(req)
         let body = try req.content.decode(PrinterUpdateRequest.self)
+        return try await Self.applyUpdate(body, to: model, on: req.db)
+    }
 
+    static func applyUpdate(_ body: PrinterUpdateRequest, to model: PrinterModel, on db: Database) async throws -> PrinterProfile {
         if let v = body.name { model.name = v }
         if let v = body.buildX { model.buildX = v }
         if let v = body.buildY { model.buildY = v }
@@ -87,22 +98,36 @@ struct PrinterController: RouteCollection {
         if let v = body.supportsPercent { model.supportsPercent = v }
         if let v = body.purgePercent { model.purgePercent = v }
         if let v = body.speedEfficiency { model.speedEfficiency = v }
-        try await model.save(on: req.db)
+        try await model.save(on: db)
         return model.toDTO()
     }
 
     @Sendable
     func delete(req: Request) async throws -> HTTPStatus {
         let model = try await find(req)
-        try await model.delete(on: req.db)
+        try await Self.deletePrinter(model, on: req.db)
         return .noContent
     }
 
+    static func deletePrinter(_ model: PrinterModel, on db: Database) async throws {
+        try await model.delete(on: db)
+    }
+
     private func find(_ req: Request) async throws -> PrinterModel {
-        guard let id = req.parameters.get("printerID", as: UUID.self),
-              let model = try await PrinterModel.find(id, on: req.db) else {
+        try await Self.find(id: requirePrinterID(req), on: req.db)
+    }
+
+    static func find(id: UUID, on db: Database) async throws -> PrinterModel {
+        guard let model = try await PrinterModel.find(id, on: db) else {
             throw Abort(.notFound, reason: "Imprimante introuvable")
         }
         return model
+    }
+
+    private func requirePrinterID(_ req: Request) throws -> UUID {
+        guard let id = req.parameters.get("printerID", as: UUID.self) else {
+            throw Abort(.notFound, reason: "Imprimante introuvable")
+        }
+        return id
     }
 }
