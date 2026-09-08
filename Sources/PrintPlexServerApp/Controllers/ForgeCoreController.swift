@@ -53,12 +53,16 @@ struct ForgeCoreController: RouteCollection {
 
     @Sendable
     func pending(req: Request) async throws -> [ForgeCorePendingProject] {
+        try await Self.fetchPending(on: req.db)
+    }
+
+    static func fetchPending(on db: Database) async throws -> [ForgeCorePendingProject] {
         // Compared against a local `let`, not an inline string literal —
         // mirrors `\.$kindRaw == kindRaw` in FileController rather than
         // `\.$field == "literal"`, which has tripped Fluent's key-path type
         // inference before.
         let pendingStatus = "pending"
-        let models = try await ProjectModel.query(on: req.db)
+        let models = try await ProjectModel.query(on: db)
             .filter(\.$sourceScrapeStatus == pendingStatus)
             .all()
         return models.compactMap { model in

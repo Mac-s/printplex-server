@@ -13,6 +13,7 @@ enum MCPToolRegistry {
         MaterialMCPTools.tools,
         SettingsMCPTools.tools,
         ShopifyMCPTools.tools,
+        ForgeCoreMCPTools.tools,
     ]
     static let callHandlers: [@Sendable (String, [String: Value]?, Application) async throws -> CallTool.Result?] = [
         ProjectMCPTools.call,
@@ -23,6 +24,7 @@ enum MCPToolRegistry {
         MaterialMCPTools.call,
         SettingsMCPTools.call,
         ShopifyMCPTools.call,
+        ForgeCoreMCPTools.call,
     ]
 
     static var allTools: [Tool] { toolGroups.flatMap { $0 } }

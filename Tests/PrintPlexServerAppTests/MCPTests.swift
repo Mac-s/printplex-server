@@ -183,4 +183,10 @@ final class MCPTests: XCTestCase {
         XCTAssertTrue(res.body.string.contains("\"isError\":true"))
         XCTAssertTrue(res.body.string.contains("Shopify non configuré"))
     }
+
+    func testGetForgecorePendingToolReturnsEmptyArrayWhenNothingPending() async throws {
+        let res = try await callTool("get_forgecore_pending")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+    }
 }
