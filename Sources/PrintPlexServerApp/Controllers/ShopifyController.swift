@@ -37,11 +37,22 @@ struct ShopifyCreateProductRequest: Content {
     var categoryMetafields: [ShopifyMetafieldInput]?
 }
 
+/// Partial update — every field optional, `nil` leaves that field untouched
+/// on Shopify (matches `ShopifyClient.updateProduct`'s own semantics).
+struct ShopifyUpdateProductRequest: Content {
+    var title: String?
+    var bodyHtml: String?
+    var vendor: String?
+    var productType: String?
+    var tags: String?
+}
+
 struct ShopifyController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let shopify = routes.grouped("api", "shopify")
         shopify.get("products", use: products)
         shopify.post("products", use: createProduct)
+        shopify.patch("products", ":productID", use: updateProduct)
         shopify.post("sync", use: sync)
     }
 
@@ -76,6 +87,26 @@ struct ShopifyController: RouteCollection {
                 variants: body.variants ?? [], metafields: body.metafields ?? [],
                 images: images, collections: body.collections ?? [],
                 category: body.category, categoryMetafields: body.categoryMetafields ?? []
+            )
+        } catch {
+            throw abortify(error)
+        }
+    }
+
+    @Sendable
+    func updateProduct(req: Request) async throws -> ShopifyProduct {
+        guard let id = req.parameters.get("productID", as: Int.self) else {
+            throw Abort(.notFound, reason: "Produit introuvable")
+        }
+        let body = try req.content.decode(ShopifyUpdateProductRequest.self)
+        return try await Self.updateProduct(id: id, body, app: req.application)
+    }
+
+    static func updateProduct(id: Int, _ body: ShopifyUpdateProductRequest, app: Application) async throws -> ShopifyProduct {
+        do {
+            return try await cache(app).updateProduct(
+                id: id, title: body.title, bodyHtml: body.bodyHtml,
+                vendor: body.vendor, productType: body.productType, tags: body.tags
             )
         } catch {
             throw abortify(error)

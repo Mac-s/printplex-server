@@ -19,6 +19,18 @@ enum ShopifyMCPTools {
                     "imageFileIds": arrayProp("UUIDs de fichiers projet locaux à joindre comme photos"),
                 ],
                 required: ["title"])),
+        Tool(name: "update_shopify_product",
+             description: "Met à jour les champs texte d'un produit Shopify existant (titre, description, marque, type, tags). Seuls les champs fournis sont modifiés.",
+             inputSchema: objectSchema(
+                properties: [
+                    "productId": stringProp("ID numérique du produit Shopify"),
+                    "title": stringProp("Nouveau titre"),
+                    "bodyHtml": stringProp("Nouvelle description HTML"),
+                    "vendor": stringProp("Marque/fournisseur"),
+                    "productType": stringProp("Type de produit"),
+                    "tags": stringProp("Tags, séparés par des virgules"),
+                ],
+                required: ["productId"])),
         Tool(name: "sync_shopify",
              description: "Force une synchronisation complète avec Shopify.",
              inputSchema: objectSchema()),
@@ -32,6 +44,13 @@ enum ShopifyMCPTools {
         case "create_shopify_product":
             let body = try decodeArguments(ShopifyCreateProductRequest.self, from: arguments)
             return try await toolResult(ShopifyController.createProduct(body, app: app))
+
+        case "update_shopify_product":
+            guard let raw = arguments?["productId"]?.stringValue, let id = Int(raw) else {
+                throw MCPToolError.invalidArguments("productId manquant ou invalide")
+            }
+            let body = try decodeArguments(ShopifyUpdateProductRequest.self, from: arguments)
+            return try await toolResult(ShopifyController.updateProduct(id: id, body, app: app))
 
         case "sync_shopify":
             return try await toolResult(ShopifyController.syncShopify(app: app))

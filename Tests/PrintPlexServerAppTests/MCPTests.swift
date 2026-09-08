@@ -264,6 +264,20 @@ final class MCPTests: XCTestCase {
         XCTAssertTrue(res.body.string.contains("Shopify non configuré"))
     }
 
+    func testUpdateShopifyProductToolReturnsServiceUnavailableWhenNotConfigured() async throws {
+        let res = try await callTool("update_shopify_product", arguments: ["productId": "123", "title": "Nouveau titre"])
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertTrue(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("Shopify non configuré"))
+    }
+
+    func testUpdateShopifyProductToolRejectsMissingProductId() async throws {
+        let res = try await callTool("update_shopify_product", arguments: ["title": "Nouveau titre"])
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertTrue(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("productId"))
+    }
+
     func testGetForgecorePendingToolReturnsEmptyArrayWhenNothingPending() async throws {
         let res = try await callTool("get_forgecore_pending")
         XCTAssertEqual(res.status, .ok)

@@ -363,6 +363,27 @@ private struct ShopifyProductCreateRequest: Codable {
 private struct ShopifyProductCreateWrapper: Codable { let product: ShopifyProductCreateRequest }
 private struct ShopifyProductCreateResponse: Codable { let product: ShopifyProduct }
 
+/// Shopify's REST `PUT /products/{id}.json` only touches the fields present
+/// in the body — omitted fields keep their existing value server-side, so
+/// every field here stays optional (unlike create, which always sends a
+/// full `status`/`title`).
+private struct ShopifyProductUpdateRequest: Codable {
+    var id: Int
+    var title: String?
+    var bodyHtml: String?
+    var vendor: String?
+    var productType: String?
+    var tags: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, tags, vendor
+        case bodyHtml = "body_html"
+        case productType = "product_type"
+    }
+}
+
+private struct ShopifyProductUpdateWrapper: Codable { let product: ShopifyProductUpdateRequest }
+
 // MARK: - Credentials
 
 public struct ShopifyCredentials: Sendable {
@@ -848,6 +869,48 @@ public struct ShopifyClient: Sendable {
             }
         }
         return created
+    }
+
+    /// Updates an existing product's simple text fields — `nil` leaves that
+    /// field untouched on Shopify, matching the REST API's own partial-update
+    /// semantics. Deliberately doesn't touch variants/images/collections/
+    /// category, unlike `createProduct` — those aren't needed by any caller
+    /// yet, and can be added the same way if that changes.
+    public func updateProduct(
+        id: Int,
+        title: String? = nil,
+        bodyHtml: String? = nil,
+        vendor: String? = nil,
+        productType: String? = nil,
+        tags: String? = nil
+    ) async throws -> ShopifyProduct {
+        guard credentials.isConfigured else { throw ShopifyError.notConfigured }
+
+        let payload = ShopifyProductUpdateRequest(
+            id: id, title: title, bodyHtml: bodyHtml, vendor: vendor,
+            productType: productType, tags: tags
+        )
+
+        let url = URL(string: "https://\(credentials.normalizedDomain)/admin/api/2024-01/products/\(id).json")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue(credentials.accessToken, forHTTPHeaderField: "X-Shopify-Access-Token")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(ShopifyProductUpdateWrapper(product: payload))
+        request.timeoutInterval = 30
+
+        let data: Data, response: URLResponse
+        do {
+            (data, response) = try await URLSession.shared.portableData(for: request)
+        } catch {
+            throw ShopifyError.wrapNetworkError(error)
+        }
+        guard let http = response as? HTTPURLResponse else { throw ShopifyError.invalidResponse }
+        guard http.statusCode == 200 else {
+            throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
+        }
+        return try JSONDecoder().decode(ShopifyProductCreateResponse.self, from: data).product
     }
 
     // MARK: - Matching
