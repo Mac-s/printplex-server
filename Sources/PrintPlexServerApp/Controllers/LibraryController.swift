@@ -30,14 +30,22 @@ struct LibraryController: RouteCollection {
 
     @Sendable
     func index(req: Request) async throws -> [LibraryDTO] {
-        try await LibraryModel.query(on: req.db).sort(\.$sortOrder).all().map { $0.toDTO() }
+        try await Self.fetchIndex(on: req.db)
+    }
+
+    static func fetchIndex(on db: Database) async throws -> [LibraryDTO] {
+        try await LibraryModel.query(on: db).sort(\.$sortOrder).all().map { $0.toDTO() }
     }
 
     @Sendable
     func create(req: Request) async throws -> LibraryDTO {
         let body = try req.content.decode(LibraryCreateRequest.self)
-        let mediaPath = req.application.appConfig.mediaPath
-        let relativePath = try Self.validatedRelativePath(body.relativePath, mediaPath: mediaPath)
+        return try await Self.createLibrary(body, app: req.application)
+    }
+
+    static func createLibrary(_ body: LibraryCreateRequest, app: Application) async throws -> LibraryDTO {
+        let mediaPath = app.appConfig.mediaPath
+        let relativePath = try validatedRelativePath(body.relativePath, mediaPath: mediaPath)
 
         let name = body.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else {
@@ -51,34 +59,40 @@ struct LibraryController: RouteCollection {
             throw Abort(.badRequest, reason: "Ce dossier n'existe pas dans le répertoire média")
         }
 
-        if try await LibraryModel.query(on: req.db)
+        if try await LibraryModel.query(on: app.db)
             .filter(\.$relativePath == relativePath)
             .first() != nil {
             throw Abort(.conflict, reason: "Ce dossier est déjà une bibliothèque")
         }
 
-        let maxOrder = try await LibraryModel.query(on: req.db).max(\.$sortOrder) ?? -1
+        let maxOrder = try await LibraryModel.query(on: app.db).max(\.$sortOrder) ?? -1
         let model = LibraryModel(name: name, relativePath: relativePath, sortOrder: maxOrder + 1)
-        try await model.save(on: req.db)
+        try await model.save(on: app.db)
 
         // New library, empty results so far — worth a scan without making the
         // caller wait for it (mirrors the "Scanner maintenant" button).
-        Task.detached(priority: .background) { await req.application.scanService.runScan() }
+        Task.detached(priority: .background) { await app.scanService.runScan() }
 
         return model.toDTO()
     }
 
     @Sendable
     func delete(req: Request) async throws -> HTTPStatus {
-        guard let id = req.parameters.get("libraryID", as: UUID.self),
-              let model = try await LibraryModel.find(id, on: req.db) else {
+        guard let id = req.parameters.get("libraryID", as: UUID.self) else {
             throw Abort(.notFound, reason: "Bibliothèque introuvable")
         }
-        try await model.delete(on: req.db)
+        try await Self.deleteLibrary(id: id, on: req.db)
+        return .noContent
+    }
+
+    static func deleteLibrary(id: UUID, on db: Database) async throws {
+        guard let model = try await LibraryModel.find(id, on: db) else {
+            throw Abort(.notFound, reason: "Bibliothèque introuvable")
+        }
+        try await model.delete(on: db)
         // Projects/files that were under this folder stop being "seen" by the
         // next scan and get cleaned up by its usual stale-entry removal —
         // same mechanism that already handles files deleted from disk.
-        return .noContent
     }
 
     /// Lists subdirectories under `mediaPath/path`, for the folder-picker in
@@ -86,9 +100,13 @@ struct LibraryController: RouteCollection {
     /// a library). Only directories are listed — files aren't pickable.
     @Sendable
     func browse(req: Request) async throws -> BrowseResponse {
-        let mediaPath = req.application.appConfig.mediaPath
         let requested = (try? req.query.get(String.self, at: "path")) ?? ""
-        let relativePath = try Self.validatedRelativePath(requested, mediaPath: mediaPath)
+        return try Self.browse(path: requested, app: req.application)
+    }
+
+    static func browse(path requested: String, app: Application) throws -> BrowseResponse {
+        let mediaPath = app.appConfig.mediaPath
+        let relativePath = try validatedRelativePath(requested, mediaPath: mediaPath)
         let absolutePath = relativePath.isEmpty ? mediaPath
             : URL(fileURLWithPath: mediaPath).appendingPathComponent(relativePath).standardizedFileURL.path
 

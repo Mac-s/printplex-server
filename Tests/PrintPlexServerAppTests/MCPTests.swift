@@ -128,4 +128,16 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(res.status, .ok)
         XCTAssertTrue(res.body.string.contains("\"isScanning\""))
     }
+
+    func testListLibrariesToolReturnsEmptyArrayWhenNoLibraries() async throws {
+        let res = try await callTool("list_libraries")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+    }
+
+    func testDeleteLibraryToolReturns404ForUnknownId() async throws {
+        let res = try await callTool("delete_library", arguments: ["libraryId": UUID().uuidString])
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertTrue(res.body.string.contains("\"isError\":true"))
+    }
 }
