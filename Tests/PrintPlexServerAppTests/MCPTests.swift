@@ -151,4 +151,12 @@ final class MCPTests: XCTestCase {
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
         XCTAssertTrue(res.body.string.contains("Test Printer"))
     }
+
+    func testListMaterialsToolReturnsSeededCatalog() async throws {
+        let res = try await callTool("list_materials")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+        // seedReferenceDataIfNeeded() seeds PrintMaterial.defaults at boot.
+        XCTAssertTrue(res.body.string.contains("\"pricePerKg\""))
+    }
 }
