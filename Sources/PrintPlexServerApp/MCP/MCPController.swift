@@ -9,19 +9,28 @@ struct MCPController: RouteCollection {
 
     @Sendable
     func handle(req: Vapor.Request) async throws -> Vapor.Response {
-        let transport = req.application.mcpTransport
+        let transport = try await makeMCPTransport(app: req.application)
         let mcpRequest = mcpHTTPRequest(from: req)
         let mcpResponse = await transport.handleRequest(mcpRequest)
         return vaporResponse(from: mcpResponse)
     }
 }
 
-/// Creates the MCP `Server`, wires it to a `StatelessHTTPServerTransport`
-/// (single JSON request/response per call — this server never needs to push
-/// unsolicited notifications, so the simpler stateless transport is enough,
-/// no session/SSE machinery), and registers the two method handlers every
-/// tool group dispatches through. Called once from `configure(_:)`.
-func configureMCPServer(_ app: Application) async throws {
+/// Builds a fresh MCP `Server` + `StatelessHTTPServerTransport` pair for a
+/// single HTTP request, and wires it to the two method handlers every tool
+/// group dispatches through.
+///
+/// The SDK's `Server` actor tracks `isInitialized` as a single flag for its
+/// whole lifetime. Sharing one `Server` across every incoming request meant
+/// only the very first client's `initialize` call ever succeeded — every
+/// other client (or a reconnect) was rejected with "Server is already
+/// initialized". A fresh, in-process `Server` per request avoids that
+/// entirely, and costs nothing structurally: this is exactly the "stateless,
+/// single JSON request/response" contract `StatelessHTTPServerTransport` was
+/// chosen for, and `configuration: .default` (non-strict) means
+/// `tools/list`/`tools/call` never require a prior `initialize` on the same
+/// instance anyway.
+func makeMCPTransport(app: Application) async throws -> StatelessHTTPServerTransport {
     let transport = StatelessHTTPServerTransport(
         // The server is reached over the public internet behind the existing
         // X-API-Key gate (AuthMiddleware), not bound to localhost — the
@@ -59,14 +68,5 @@ func configureMCPServer(_ app: Application) async throws {
         }
     }
     try await server.start(transport: transport)
-    app.mcpTransport = transport
-}
-
-struct MCPTransportKey: StorageKey { typealias Value = StatelessHTTPServerTransport }
-
-extension Application {
-    var mcpTransport: StatelessHTTPServerTransport {
-        get { storage[MCPTransportKey.self]! }
-        set { storage[MCPTransportKey.self] = newValue }
-    }
+    return transport
 }

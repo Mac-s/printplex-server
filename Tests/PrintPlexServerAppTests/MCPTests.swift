@@ -85,6 +85,42 @@ final class MCPTests: XCTestCase {
         })
     }
 
+    /// Regression test: the MCP `Server` is stateless per-request (a fresh
+    /// instance is built for every HTTP call, see `makeMCPTransport`), so a
+    /// second independent client's `initialize` — e.g. a reconnect, or a
+    /// second agent — must succeed too, not fail with "Server is already
+    /// initialized" the way it would if one `Server` were shared across
+    /// every request.
+    func testInitializeSucceedsForASecondIndependentClient() async throws {
+        func initialize() async throws -> XCTHTTPResponse {
+            var captured: XCTHTTPResponse!
+            try await app.test(.POST, "api/mcp", beforeRequest: { req in
+                req.headers.replaceOrAdd(name: "Content-Type", value: "application/json")
+                req.headers.replaceOrAdd(name: "Accept", value: "application/json")
+                req.body = try rpc([
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": [
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": [String: Any](),
+                        "clientInfo": ["name": "test-client", "version": "1.0"],
+                    ],
+                ])
+            }, afterResponse: { res async throws in
+                captured = res
+            })
+            return captured
+        }
+
+        let first = try await initialize()
+        XCTAssertEqual(first.status, .ok)
+        XCTAssertTrue(first.body.string.contains("\"protocolVersion\""))
+
+        let second = try await initialize()
+        XCTAssertEqual(second.status, .ok)
+        XCTAssertTrue(second.body.string.contains("\"protocolVersion\""))
+        XCTAssertFalse(second.body.string.contains("already initialized"))
+    }
+
     func testToolsListReturnsRegisteredProjectTools() async throws {
         try await app.test(.POST, "api/mcp", beforeRequest: { req in
             req.headers.replaceOrAdd(name: "Content-Type", value: "application/json")

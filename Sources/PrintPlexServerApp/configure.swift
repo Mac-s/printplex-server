@@ -91,8 +91,6 @@ func configure(_ app: Application) async throws {
     // Serves Public/ — the vanilla-JS test dashboard — with index.html at "/".
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory, defaultFile: "index.html"))
 
-    try await configureMCPServer(app)
-
     try routes(app)
 
     // Boot scan + periodic rescan (no FSEvents on Linux; polling is the
