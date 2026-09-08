@@ -122,4 +122,10 @@ final class MCPTests: XCTestCase {
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
         XCTAssertTrue(res.body.string.contains("\"structuredContent\":[]"))
     }
+
+    func testGetScanStatusToolReturnsStatus() async throws {
+        let res = try await callTool("get_scan_status")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertTrue(res.body.string.contains("\"isScanning\""))
+    }
 }

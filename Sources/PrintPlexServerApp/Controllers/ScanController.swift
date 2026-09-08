@@ -22,8 +22,12 @@ struct ScanController: RouteCollection {
     /// (scan + mesh parsing), which is also what the tests rely on.
     @Sendable
     func trigger(req: Request) async throws -> ScanStatusResponse {
-        let service = req.application.scanService
         let wait = (try? req.query.get(Bool.self, at: "wait")) ?? false
+        return try await Self.triggerScan(wait: wait, app: req.application)
+    }
+
+    static func triggerScan(wait: Bool, app: Application) async throws -> ScanStatusResponse {
+        let service = app.scanService
         if wait {
             // Caller explicitly asked to block until done — run at normal
             // priority so it doesn't sit needlessly behind other background work.
@@ -33,12 +37,12 @@ struct ScanController: RouteCollection {
             // yield to anything request-driven, so it runs at the lowest priority.
             Task.detached(priority: .background) { await service.runScan() }
         }
-        return try await makeStatus(req)
+        return try await makeStatus(app: app)
     }
 
     @Sendable
     func status(req: Request) async throws -> ScanStatusResponse {
-        try await makeStatus(req)
+        try await Self.makeStatus(app: req.application)
     }
 
     /// GET /api/scan/events — Server-Sent Events stream of scan progress.
@@ -74,10 +78,10 @@ struct ScanController: RouteCollection {
         return response
     }
 
-    private func makeStatus(_ req: Request) async throws -> ScanStatusResponse {
-        let state = await req.application.scanService.state()
-        let projectCount = try await ProjectModel.query(on: req.db).count()
-        let fileCount = try await FileModel.query(on: req.db).count()
+    static func makeStatus(app: Application) async throws -> ScanStatusResponse {
+        let state = await app.scanService.state()
+        let projectCount = try await ProjectModel.query(on: app.db).count()
+        let fileCount = try await FileModel.query(on: app.db).count()
         return ScanStatusResponse(
             isScanning: state.isScanning,
             lastScanDate: state.lastScanDate,
