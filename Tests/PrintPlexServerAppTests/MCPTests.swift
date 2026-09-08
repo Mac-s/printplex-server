@@ -159,4 +159,18 @@ final class MCPTests: XCTestCase {
         // seedReferenceDataIfNeeded() seeds PrintMaterial.defaults at boot.
         XCTAssertTrue(res.body.string.contains("\"pricePerKg\""))
     }
+
+    func testGetShopifySettingsToolNeverReturnsAccessToken() async throws {
+        // Directly seed a token via the settings row, bypassing the API, so
+        // this test would fail loudly if the redaction were ever removed.
+        let row = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: app.db)!
+        row.shopifyStoreDomain = "maboutique.myshopify.com"
+        row.shopifyAccessToken = "shpat_supersecret"
+        try await row.save(on: app.db)
+
+        let res = try await callTool("get_shopify_settings")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("shpat_supersecret"))
+        XCTAssertTrue(res.body.string.contains("maboutique.myshopify.com"))
+    }
 }

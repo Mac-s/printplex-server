@@ -49,15 +49,19 @@ struct SettingsController: RouteCollection {
 
     @Sendable
     func overview(req: Request) async throws -> SettingsOverview {
-        let scanSettings = await req.application.scanService.currentScanSettings()
-        let config = req.application.appConfig
+        try await Self.fetchOverview(app: req.application)
+    }
+
+    static func fetchOverview(app: Application) async throws -> SettingsOverview {
+        let scanSettings = await app.scanService.currentScanSettings()
+        let config = app.appConfig
 
         var storeDomain = ""
         var configured = false
         var productCount = 0
         var lastSyncDate: Date?
         var syncError: String?
-        if let cache = req.application.shopifyCache {
+        if let cache = app.shopifyCache {
             let creds = await cache.credentials
             storeDomain = creds.storeDomain
             configured = creds.isConfigured
@@ -94,7 +98,11 @@ struct SettingsController: RouteCollection {
     /// UserDefaults. Acceptable for a personal server on a private network.
     @Sendable
     func shopify(req: Request) async throws -> ShopifySettingsResponse {
-        guard let row = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: req.db) else {
+        try await Self.fetchShopifySettings(on: req.db)
+    }
+
+    static func fetchShopifySettings(on db: Database) async throws -> ShopifySettingsResponse {
+        guard let row = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: db) else {
             return ShopifySettingsResponse(storeDomain: "", accessToken: "", configured: false)
         }
         let creds = ShopifyCredentials(storeDomain: row.shopifyStoreDomain ?? "",
@@ -107,19 +115,23 @@ struct SettingsController: RouteCollection {
     @Sendable
     func updateShopify(req: Request) async throws -> ShopifySettingsResponse {
         let body = try req.content.decode(ShopifySettingsUpdateRequest.self)
+        return try await Self.applyShopifyUpdate(body, app: req.application)
+    }
+
+    static func applyShopifyUpdate(_ body: ShopifySettingsUpdateRequest, app: Application) async throws -> ShopifySettingsResponse {
         let credentials = ShopifyCredentials(storeDomain: body.storeDomain, accessToken: body.accessToken)
 
-        guard let row = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: req.db) else {
+        guard let row = try await AppSettingsModel.find(AppSettingsModel.singletonID, on: app.db) else {
             throw Abort(.internalServerError, reason: "Ligne de réglages absente")
         }
         row.shopifyStoreDomain = credentials.storeDomain
         row.shopifyAccessToken = credentials.accessToken
-        try await row.save(on: req.db)
+        try await row.save(on: app.db)
 
-        if let cache = req.application.shopifyCache {
+        if let cache = app.shopifyCache {
             await cache.updateCredentials(credentials)
         } else if credentials.isConfigured {
-            req.application.shopifyCache = ShopifyCache(credentials: credentials)
+            app.shopifyCache = ShopifyCache(credentials: credentials)
         }
 
         return ShopifySettingsResponse(storeDomain: credentials.storeDomain,
