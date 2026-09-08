@@ -142,11 +142,11 @@ final class MCPTests: XCTestCase {
         let res = try await callTool("list_projects")
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
-        // structuredContent is null for array-returning tools (MCP spec
-        // requires it to be an object when present) — the payload lives in
-        // the text block instead.
+        // Array-returning tools get their payload wrapped under "items" in
+        // structuredContent (MCP requires it to be an object) — the
+        // unwrapped payload also lives in the text block.
         XCTAssertTrue(res.body.string.contains("\"text\":\"[]\""))
-        XCTAssertTrue(res.body.string.contains("\"structuredContent\":null"))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":{\"items\":[]}"))
     }
 
     func testGetProjectToolReturns404ForUnknownId() async throws {
@@ -161,7 +161,7 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
         XCTAssertTrue(res.body.string.contains("\"text\":\"[]\""))
-        XCTAssertTrue(res.body.string.contains("\"structuredContent\":null"))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":{\"items\":[]}"))
     }
 
     /// Companion to the list-tool tests above: an object-returning tool must
@@ -184,7 +184,7 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
         XCTAssertTrue(res.body.string.contains("\"text\":\"[]\""))
-        XCTAssertTrue(res.body.string.contains("\"structuredContent\":null"))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":{\"items\":[]}"))
     }
 
     func testCreateLibraryToolReturnsISO8601DateAdded() async throws {

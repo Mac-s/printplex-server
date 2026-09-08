@@ -95,12 +95,20 @@ func toolResult<T: Codable>(_ value: T) throws -> CallTool.Result {
     // which uses a bare, non-configurable JSONEncoder internally and would
     // undo the .iso8601 strategy applied above.
     let decoded = try JSONDecoder().decode(Value.self, from: data)
-    // The MCP spec requires structuredContent to be a JSON object — several
-    // tools here (list_projects, list_files, ...) return a bare array, which
-    // real clients reject with a schema-validation error if put there. The
-    // full payload is still available in the .text block either way, so
-    // structuredContent is simply omitted when it wouldn't be an object.
-    let structured: Value? = decoded.objectValue != nil ? decoded : nil
+    // The MCP spec requires structuredContent to be a JSON object. Several
+    // tools here (list_projects, list_files, ...) return a bare array —
+    // real clients reject that outright, and (confirmed against the actual
+    // deployed server, not just the SDK's source) a nil/null
+    // structuredContent is rejected too, so omitting it isn't an option
+    // either. Wrap any non-object payload under a single key instead; the
+    // full, unwrapped payload is always available in the .text block, which
+    // has no shape constraint and is what an agent reads anyway.
+    // Explicitly `Value?` (not `Value`) — passing a concretely-typed, non-
+    // Optional `Value` here resolves to the generic `Output: Codable throws`
+    // initializer instead (Value itself conforms to Codable), which builds
+    // structuredContent via the SDK's own bare-encoder Value(_:) init and
+    // would undo the .iso8601 handling above.
+    let structured: Value? = decoded.objectValue != nil ? decoded : .object(["items": decoded])
     return CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)], structuredContent: structured)
 }
 
