@@ -133,6 +133,20 @@ final class MCPTests: XCTestCase {
         let res = try await callTool("list_libraries")
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":[]"))
+    }
+
+    func testCreateLibraryToolReturnsISO8601DateAdded() async throws {
+        // Regression test: a bare JSONEncoder/JSONDecoder in the MCP bridge
+        // defaults to .deferredToDate (a raw Double), diverging from the
+        // .iso8601 strategy every REST route uses via
+        // ContentConfiguration.default(). dateAdded is populated
+        // automatically on creation, so an ISO8601 string here (starting
+        // with "20...") would never appear if this regressed.
+        let res = try await callTool("create_library", arguments: ["name": "Bibliothèque", "relativePath": ""])
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("\"dateAdded\":\"20"))
     }
 
     func testDeleteLibraryToolReturns404ForUnknownId() async throws {
@@ -172,6 +186,17 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("shpat_supersecret"))
         XCTAssertTrue(res.body.string.contains("maboutique.myshopify.com"))
+
+        // update_shopify_settings must redact the token just as much as
+        // get_shopify_settings, even though the caller supplied it — echoing
+        // it back a second time would put a live API secret into the tool
+        // result transcript.
+        let updateRes = try await callTool("update_shopify_settings", arguments: [
+            "storeDomain": "maboutique.myshopify.com", "accessToken": "shpat_supersecret",
+        ])
+        XCTAssertEqual(updateRes.status, .ok)
+        XCTAssertFalse(updateRes.body.string.contains("shpat_supersecret"))
+        XCTAssertTrue(updateRes.body.string.contains("maboutique.myshopify.com"))
     }
 
     func testListShopifyProductsToolReturnsServiceUnavailableWhenNotConfigured() async throws {
@@ -207,8 +232,8 @@ final class MCPTests: XCTestCase {
 
     func testUpdateProjectToolPersistsChanges() async throws {
         // Seed one project directly via a scan of a real fixture, exactly
-        // like ServerTests does — an MCP write tool's effect should be
-        // visible through the same REST read path afterward.
+        // like ServerTests does, so the write's effect can be confirmed by
+        // reading the DB directly.
         let stlPath = mediaDir.appendingPathComponent("Groupe/Figurine/piece.stl")
         try FileManager.default.createDirectory(at: stlPath.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("x".utf8).write(to: stlPath)

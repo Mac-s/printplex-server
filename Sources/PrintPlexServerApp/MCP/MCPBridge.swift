@@ -55,24 +55,47 @@ enum MCPToolError: Error {
     case invalidArguments(String)
 }
 
+/// Vapor's `ContentConfiguration.default()` registers `.iso8601` date coding for
+/// every REST route. Bare `JSONEncoder`/`JSONDecoder` default to `.deferredToDate`
+/// (seconds since 2001-01-01), so MCP tools need their own matching configuration
+/// to keep `Date` fields consistent with the REST API.
+private let mcpEncoder: JSONEncoder = {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    return encoder
+}()
+
+private let mcpDecoder: JSONDecoder = {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return decoder
+}()
+
 /// Decodes a tool call's `arguments` dictionary into an existing `Content`
 /// (or any `Decodable`) request type — the same type the matching REST route
 /// already decodes from its JSON body, so argument parsing stays identical
 /// between the two entry points.
 func decodeArguments<T: Decodable>(_ type: T.Type, from arguments: [String: Value]?) throws -> T {
     let value = Value.object(arguments ?? [:])
+    // Re-serializing Value's own Codable tree, not a Date — a bare encoder is fine here.
     let data = try JSONEncoder().encode(value)
     do {
-        return try JSONDecoder().decode(T.self, from: data)
+        return try mcpDecoder.decode(T.self, from: data)
     } catch {
         throw MCPToolError.invalidArguments("\(error)")
     }
 }
 
 func toolResult<T: Codable>(_ value: T) throws -> CallTool.Result {
-    let data = try JSONEncoder().encode(value)
+    let data = try mcpEncoder.encode(value)
     let text = String(decoding: data, as: UTF8.self)
-    return try CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)], structuredContent: value)
+    // Build Value ourselves via the already-ISO8601-encoded JSON bytes and pass
+    // it through the non-generic initializer — the generic Output: Codable
+    // initializer builds structuredContent via the SDK's own Value(_:) init,
+    // which uses a bare, non-configurable JSONEncoder internally and would
+    // undo the .iso8601 strategy applied above.
+    let structured: Value? = try JSONDecoder().decode(Value.self, from: data)
+    return CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)], structuredContent: structured)
 }
 
 func toolSuccess(_ message: String) -> CallTool.Result {

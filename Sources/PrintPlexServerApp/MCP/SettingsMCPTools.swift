@@ -51,7 +51,8 @@ enum SettingsMCPTools {
 
         case "update_shopify_settings":
             let body = try decodeArguments(ShopifySettingsUpdateRequest.self, from: arguments)
-            return try await toolResult(SettingsController.applyShopifyUpdate(body, app: app))
+            let settings = try await SettingsController.applyShopifyUpdate(body, app: app)
+            return try toolResult(ShopifySettingsSummary(storeDomain: settings.storeDomain, configured: settings.configured))
 
         default:
             return nil

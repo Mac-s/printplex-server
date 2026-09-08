@@ -25,7 +25,7 @@ enum PrinterMCPTools {
              description: "Ajoute un nouveau profil d'imprimante.",
              inputSchema: objectSchema(
                 properties: upsertProperties,
-                required: Array(upsertProperties.keys))),
+                required: upsertProperties.keys.sorted())),
         Tool(name: "update_printer",
              description: "Met à jour un profil d'imprimante existant. Seuls les champs fournis sont modifiés.",
              inputSchema: objectSchema(
