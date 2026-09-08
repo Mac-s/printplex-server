@@ -189,4 +189,46 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
     }
+
+    func testToolsListIncludesEveryRegisteredGroup() async throws {
+        try await app.test(.POST, "api/mcp", beforeRequest: { req in
+            req.headers.replaceOrAdd(name: "Content-Type", value: "application/json")
+            req.headers.replaceOrAdd(name: "Accept", value: "application/json")
+            req.body = try rpc(["jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": [:]])
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            for name in ["list_projects", "list_files", "trigger_scan", "list_libraries",
+                         "list_printers", "list_materials", "get_settings",
+                         "list_shopify_products", "get_forgecore_pending"] {
+                XCTAssertTrue(res.body.string.contains("\"\(name)\""), "missing tool: \(name)")
+            }
+        })
+    }
+
+    func testUpdateProjectToolPersistsChanges() async throws {
+        // Seed one project directly via a scan of a real fixture, exactly
+        // like ServerTests does — an MCP write tool's effect should be
+        // visible through the same REST read path afterward.
+        let stlPath = mediaDir.appendingPathComponent("Groupe/Figurine/piece.stl")
+        try FileManager.default.createDirectory(at: stlPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: stlPath)
+        // Libraries are Plex-style: nothing is scanned until at least one is
+        // configured (see ServerTests.addLibrary()).
+        try await app.test(.POST, "api/libraries", beforeRequest: { req in
+            try req.content.encode(LibraryCreateRequest(name: "Bibliothèque", relativePath: ""))
+        }, afterResponse: { res async in
+            XCTAssertEqual(res.status, .ok)
+        })
+        await app.scanService.runScan()
+
+        let project = try await ProjectModel.query(on: app.db).first()
+        let projectId = try XCTUnwrap(project?.requireID()).uuidString
+
+        let res = try await callTool("update_project", arguments: ["projectId": projectId, "notes": "Testé via MCP"])
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+
+        let reloaded = try await ProjectModel.find(UUID(uuidString: projectId), on: app.db)
+        XCTAssertEqual(reloaded?.notes, "Testé via MCP")
+    }
 }

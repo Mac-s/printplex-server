@@ -311,6 +311,29 @@ entièrement piloté depuis Réglages → Compte. Les sessions sont en mémoire 
 un redémarrage du conteneur déconnecte tout le monde, sans conséquence au-delà de devoir se
 reconnecter.
 
+### Serveur MCP (agents LLM)
+
+`POST /api/mcp` expose la bibliothèque (projets, fichiers, scan, bibliothèques,
+imprimantes, matériaux, réglages, Shopify, ForgeCore) à tout agent compatible
+[MCP](https://modelcontextprotocol.io) — Claude Desktop, Claude Code, ou un
+autre client — en lecture et écriture complètes.
+
+Même mécanisme d'authentification que le reste de l'API : la clé API
+(`Réglages → Clé API` dans le dashboard) doit être envoyée dans l'en-tête
+`X-API-Key`. Dans la configuration MCP distante de Claude Desktop/Code,
+renseigner l'URL `https://<votre-serveur>/api/mcp` et ajouter cet en-tête
+personnalisé.
+
+Pour vérifier manuellement la liste des tools disponibles et en appeler un
+sans passer par un agent :
+
+```bash
+npx @modelcontextprotocol/inspector
+# Transport: Streamable HTTP
+# URL: https://<votre-serveur>/api/mcp
+# Header personnalisé: X-API-Key: <votre clé>
+```
+
 ### Variables d'environnement
 
 `PRINTPLEX_MEDIA_PATH` (point de montage générique — les bibliothèques elles-mêmes se configurent
