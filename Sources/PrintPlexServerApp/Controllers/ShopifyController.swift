@@ -47,22 +47,30 @@ struct ShopifyController: RouteCollection {
 
     @Sendable
     func products(req: Request) async throws -> [ShopifyProduct] {
+        try await Self.fetchProducts(app: req.application)
+    }
+
+    static func fetchProducts(app: Application) async throws -> [ShopifyProduct] {
         do {
-            return try await cache(req).productsSyncingIfNeeded()
+            return try await cache(app).productsSyncingIfNeeded()
         } catch {
-            throw Self.abortify(error)
+            throw abortify(error)
         }
     }
 
     @Sendable
     func createProduct(req: Request) async throws -> ShopifyProduct {
         let body = try req.content.decode(ShopifyCreateProductRequest.self)
+        return try await Self.createProduct(body, app: req.application)
+    }
+
+    static func createProduct(_ body: ShopifyCreateProductRequest, app: Application) async throws -> ShopifyProduct {
         guard !body.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw Abort(.badRequest, reason: "Le titre est obligatoire")
         }
-        let images = try await resolveImages(fileIds: body.imageFileIds ?? [], req: req)
+        let images = try await resolveImages(fileIds: body.imageFileIds ?? [], app: app)
         do {
-            return try await cache(req).createProduct(
+            return try await cache(app).createProduct(
                 title: body.title, bodyHtml: body.bodyHtml, vendor: body.vendor,
                 productType: body.productType, tags: body.tags,
                 variants: body.variants ?? [], metafields: body.metafields ?? [],
@@ -70,19 +78,19 @@ struct ShopifyController: RouteCollection {
                 category: body.category, categoryMetafields: body.categoryMetafields ?? []
             )
         } catch {
-            throw Self.abortify(error)
+            throw abortify(error)
         }
     }
 
     /// Reads each named project file straight off disk and base64-encodes it —
     /// a file that's since vanished or moved outside the media root is just
     /// skipped rather than failing the whole product creation over one photo.
-    private func resolveImages(fileIds: [UUID], req: Request) async throws -> [ShopifyImageInput] {
+    private static func resolveImages(fileIds: [UUID], app: Application) async throws -> [ShopifyImageInput] {
         guard !fileIds.isEmpty else { return [] }
-        let config = req.application.appConfig
+        let config = app.appConfig
         var images: [ShopifyImageInput] = []
         for fileId in fileIds {
-            guard let file = try await FileModel.find(fileId, on: req.db),
+            guard let file = try await FileModel.find(fileId, on: app.db),
                   let path = try? MediaPath.safePath(for: file, in: config),
                   let data = FileManager.default.contents(atPath: path) else { continue }
             images.append(ShopifyImageInput(
@@ -95,17 +103,21 @@ struct ShopifyController: RouteCollection {
 
     @Sendable
     func sync(req: Request) async throws -> ShopifySyncResponse {
-        let cache = try cache(req)
+        try await Self.syncShopify(app: req.application)
+    }
+
+    static func syncShopify(app: Application) async throws -> ShopifySyncResponse {
+        let cache = try cache(app)
         do {
             let count = try await cache.sync()
             return ShopifySyncResponse(productCount: count, lastSyncDate: await cache.lastSyncDate)
         } catch {
-            throw Self.abortify(error)
+            throw abortify(error)
         }
     }
 
-    private func cache(_ req: Request) throws -> ShopifyCache {
-        guard let cache = req.application.shopifyCache else {
+    private static func cache(_ app: Application) throws -> ShopifyCache {
+        guard let cache = app.shopifyCache else {
             throw Abort(.serviceUnavailable, reason: "Shopify non configuré (SHOPIFY_STORE_DOMAIN / SHOPIFY_ACCESS_TOKEN)")
         }
         return cache

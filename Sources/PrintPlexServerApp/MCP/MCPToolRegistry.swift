@@ -12,6 +12,7 @@ enum MCPToolRegistry {
         PrinterMCPTools.tools,
         MaterialMCPTools.tools,
         SettingsMCPTools.tools,
+        ShopifyMCPTools.tools,
     ]
     static let callHandlers: [@Sendable (String, [String: Value]?, Application) async throws -> CallTool.Result?] = [
         ProjectMCPTools.call,
@@ -21,6 +22,7 @@ enum MCPToolRegistry {
         PrinterMCPTools.call,
         MaterialMCPTools.call,
         SettingsMCPTools.call,
+        ShopifyMCPTools.call,
     ]
 
     static var allTools: [Tool] { toolGroups.flatMap { $0 } }

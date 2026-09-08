@@ -173,4 +173,14 @@ final class MCPTests: XCTestCase {
         XCTAssertFalse(res.body.string.contains("shpat_supersecret"))
         XCTAssertTrue(res.body.string.contains("maboutique.myshopify.com"))
     }
+
+    func testListShopifyProductsToolReturnsServiceUnavailableWhenNotConfigured() async throws {
+        // SHOPIFY_STORE_DOMAIN/ACCESS_TOKEN are empty in setUp(), so no
+        // ShopifyCache is created at boot — this must surface as a tool
+        // error, not a crash.
+        let res = try await callTool("list_shopify_products")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertTrue(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("Shopify non configuré"))
+    }
 }
