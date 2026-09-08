@@ -142,7 +142,11 @@ final class MCPTests: XCTestCase {
         let res = try await callTool("list_projects")
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
-        XCTAssertTrue(res.body.string.contains("\"structuredContent\":[]"))
+        // structuredContent is null for array-returning tools (MCP spec
+        // requires it to be an object when present) — the payload lives in
+        // the text block instead.
+        XCTAssertTrue(res.body.string.contains("\"text\":\"[]\""))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":null"))
     }
 
     func testGetProjectToolReturns404ForUnknownId() async throws {
@@ -156,7 +160,17 @@ final class MCPTests: XCTestCase {
         let res = try await callTool("list_files")
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
-        XCTAssertTrue(res.body.string.contains("\"structuredContent\":[]"))
+        XCTAssertTrue(res.body.string.contains("\"text\":\"[]\""))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":null"))
+    }
+
+    /// Companion to the list-tool tests above: an object-returning tool must
+    /// still get a real structuredContent object (only arrays are omitted).
+    func testGetSettingsToolIncludesStructuredContentObject() async throws {
+        let res = try await callTool("get_settings")
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":{"))
     }
 
     func testGetScanStatusToolReturnsStatus() async throws {
@@ -169,7 +183,8 @@ final class MCPTests: XCTestCase {
         let res = try await callTool("list_libraries")
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
-        XCTAssertTrue(res.body.string.contains("\"structuredContent\":[]"))
+        XCTAssertTrue(res.body.string.contains("\"text\":\"[]\""))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":null"))
     }
 
     func testCreateLibraryToolReturnsISO8601DateAdded() async throws {
@@ -207,7 +222,11 @@ final class MCPTests: XCTestCase {
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
         // seedReferenceDataIfNeeded() seeds PrintMaterial.defaults at boot.
-        XCTAssertTrue(res.body.string.contains("\"pricePerKg\""))
+        // No surrounding quotes in the check: the payload lives in the .text
+        // block as a JSON string, so its own quotes are backslash-escaped
+        // there ( \"pricePerKg\" ) — matching the bare field name sidesteps
+        // that without hardcoding the escaping.
+        XCTAssertTrue(res.body.string.contains("pricePerKg"))
     }
 
     func testGetShopifySettingsToolNeverReturnsAccessToken() async throws {

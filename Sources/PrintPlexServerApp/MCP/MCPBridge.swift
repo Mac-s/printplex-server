@@ -94,7 +94,13 @@ func toolResult<T: Codable>(_ value: T) throws -> CallTool.Result {
     // initializer builds structuredContent via the SDK's own Value(_:) init,
     // which uses a bare, non-configurable JSONEncoder internally and would
     // undo the .iso8601 strategy applied above.
-    let structured: Value? = try JSONDecoder().decode(Value.self, from: data)
+    let decoded = try JSONDecoder().decode(Value.self, from: data)
+    // The MCP spec requires structuredContent to be a JSON object — several
+    // tools here (list_projects, list_files, ...) return a bare array, which
+    // real clients reject with a schema-validation error if put there. The
+    // full payload is still available in the .text block either way, so
+    // structuredContent is simply omitted when it wouldn't be an object.
+    let structured: Value? = decoded.objectValue != nil ? decoded : nil
     return CallTool.Result(content: [.text(text: text, annotations: nil, _meta: nil)], structuredContent: structured)
 }
 
