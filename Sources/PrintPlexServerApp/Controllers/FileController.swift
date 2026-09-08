@@ -45,6 +45,7 @@ struct FileController: RouteCollection {
         return try await Self.fetchIndex(kind: kind, on: req.db)
     }
 
+    /// Flat file listing across the whole library (all projects + unsorted), optionally filtered by kind — backs the sidebar's "Types 3D" section, which (like the macOS app's equivalent list) shows files without their project context.
     static func fetchIndex(kind: String?, on db: Database) async throws -> [FileDTO] {
         var query = FileModel.query(on: db)
         if let kind, !kind.isEmpty {
@@ -72,6 +73,7 @@ struct FileController: RouteCollection {
         try await Self.fetchStats(on: req.db)
     }
 
+    /// Counts backing the sidebar badges — kept as a single aggregate query rather than making the client fetch every file just to count them.
     static func fetchStats(on db: Database) async throws -> FileKindCounts {
         async let stl = FileModel.query(on: db).filter(\.$kindRaw == FileKind.stl.rawValue).count()
         async let threeMF = FileModel.query(on: db).filter(\.$kindRaw == FileKind.threeMF.rawValue).count()

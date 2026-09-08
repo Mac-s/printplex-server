@@ -120,5 +120,6 @@ final class MCPTests: XCTestCase {
         let res = try await callTool("list_files")
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+        XCTAssertTrue(res.body.string.contains("\"structuredContent\":[]"))
     }
 }
