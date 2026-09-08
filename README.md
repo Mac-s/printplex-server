@@ -319,7 +319,7 @@ imprimantes, matériaux, réglages, Shopify, ForgeCore) à tout agent compatible
 autre client — en lecture et écriture complètes.
 
 Même mécanisme d'authentification que le reste de l'API : la clé API
-(`Réglages → Clé API` dans le dashboard) doit être envoyée dans l'en-tête
+(`Réglages → Compte` dans le dashboard) doit être envoyée dans l'en-tête
 `X-API-Key`. Dans la configuration MCP distante de Claude Desktop/Code,
 renseigner l'URL `https://<votre-serveur>/api/mcp` et ajouter cet en-tête
 personnalisé.
