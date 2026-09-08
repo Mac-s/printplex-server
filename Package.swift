@@ -17,6 +17,7 @@ let package = Package(
         .package(url: "https://github.com/vapor/vapor.git", from: "4.99.0"),
         .package(url: "https://github.com/vapor/fluent.git", from: "4.9.0"),
         .package(url: "https://github.com/vapor/fluent-sqlite-driver.git", from: "4.6.0"),
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
     ],
     targets: [
         // zlib exposed as a portable system library (macOS SDK / Linux libz-dev).
@@ -35,6 +36,7 @@ let package = Package(
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "Fluent", package: "fluent"),
                 .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),
+                .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
         .testTarget(
