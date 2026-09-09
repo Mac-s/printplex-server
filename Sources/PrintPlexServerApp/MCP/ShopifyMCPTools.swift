@@ -20,7 +20,7 @@ enum ShopifyMCPTools {
                 ],
                 required: ["title"])),
         Tool(name: "update_shopify_product",
-             description: "Met à jour les champs texte d'un produit Shopify existant (titre, description, marque, type, tags). Seuls les champs fournis sont modifiés.",
+             description: "Met à jour les champs texte d'un produit Shopify existant (titre, description, marque, type, tags, méta titre/description SEO). Seuls les champs fournis sont modifiés.",
              inputSchema: objectSchema(
                 properties: [
                     "productId": stringProp("ID numérique du produit Shopify"),
@@ -29,6 +29,8 @@ enum ShopifyMCPTools {
                     "vendor": stringProp("Marque/fournisseur"),
                     "productType": stringProp("Type de produit"),
                     "tags": stringProp("Tags, séparés par des virgules"),
+                    "metaTitle": stringProp("Méta titre SEO (balise title)"),
+                    "metaDescription": stringProp("Méta description SEO"),
                 ],
                 required: ["productId"])),
         Tool(name: "sync_shopify",

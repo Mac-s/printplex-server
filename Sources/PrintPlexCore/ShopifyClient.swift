@@ -882,7 +882,9 @@ public struct ShopifyClient: Sendable {
         bodyHtml: String? = nil,
         vendor: String? = nil,
         productType: String? = nil,
-        tags: String? = nil
+        tags: String? = nil,
+        metaTitle: String? = nil,
+        metaDescription: String? = nil
     ) async throws -> ShopifyProduct {
         guard credentials.isConfigured else { throw ShopifyError.notConfigured }
 
@@ -910,7 +912,24 @@ public struct ShopifyClient: Sendable {
         guard http.statusCode == 200 else {
             throw ShopifyError.httpError(status: http.statusCode, detail: ShopifyError.errorDetail(from: data))
         }
-        return try JSONDecoder().decode(ShopifyProductCreateResponse.self, from: data).product
+        let updated = try JSONDecoder().decode(ShopifyProductCreateResponse.self, from: data).product
+
+        // SEO title/description are `global` namespace metafields, not REST
+        // product fields — set via the same generic GraphQL helper used for
+        // category metafields at creation time, as its own isolated call so
+        // a rejected metafield never undoes the text-field update above.
+        var seoMetafields: [ShopifyMetafieldInput] = []
+        if let metaTitle {
+            seoMetafields.append(.init(namespace: "global", key: "title_tag", value: metaTitle, type: "single_line_text_field"))
+        }
+        if let metaDescription {
+            seoMetafields.append(.init(namespace: "global", key: "description_tag", value: metaDescription, type: "multi_line_text_field"))
+        }
+        if !seoMetafields.isEmpty {
+            try await setShopifyMetafields(productId: id, metafields: seoMetafields)
+        }
+
+        return updated
     }
 
     // MARK: - Matching

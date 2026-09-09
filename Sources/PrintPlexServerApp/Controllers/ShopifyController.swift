@@ -45,6 +45,10 @@ struct ShopifyUpdateProductRequest: Content {
     var vendor: String?
     var productType: String?
     var tags: String?
+    /// SEO fields shown in search results — stored as `global` namespace
+    /// metafields on Shopify, not plain product columns (see `ShopifyClient.updateProduct`).
+    var metaTitle: String?
+    var metaDescription: String?
 }
 
 struct ShopifyController: RouteCollection {
@@ -106,7 +110,8 @@ struct ShopifyController: RouteCollection {
         do {
             return try await cache(app).updateProduct(
                 id: id, title: body.title, bodyHtml: body.bodyHtml,
-                vendor: body.vendor, productType: body.productType, tags: body.tags
+                vendor: body.vendor, productType: body.productType, tags: body.tags,
+                metaTitle: body.metaTitle, metaDescription: body.metaDescription
             )
         } catch {
             throw abortify(error)

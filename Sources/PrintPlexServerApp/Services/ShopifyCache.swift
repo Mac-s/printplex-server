@@ -91,10 +91,12 @@ actor ShopifyCache {
     /// into the cache (replacing the stale entry by id), same immediacy
     /// reasoning as `createProduct`.
     func updateProduct(id: Int, title: String?, bodyHtml: String?, vendor: String?,
-                        productType: String?, tags: String?) async throws -> ShopifyProduct {
+                        productType: String?, tags: String?, metaTitle: String?,
+                        metaDescription: String?) async throws -> ShopifyProduct {
         let updated = try await client.updateProduct(
             id: id, title: title, bodyHtml: bodyHtml, vendor: vendor,
-            productType: productType, tags: tags
+            productType: productType, tags: tags, metaTitle: metaTitle,
+            metaDescription: metaDescription
         )
         if let index = products.firstIndex(where: { $0.id == id }) {
             products[index] = updated
