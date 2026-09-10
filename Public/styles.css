@@ -539,6 +539,32 @@ button, input, select, textarea { font-family: inherit; font-size: 14px; }
 .flat-file-row .dot.on { background: #33cc66; }
 .flat-file-row .dot.off { background: #ffa733; }
 
+/* ───────────────────────── Shopify tasks dashboard ───────────────────────── */
+
+.dash-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+.dash-stat {
+  flex: 1 1 100px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.dash-stat.good { border-color: var(--good); background: var(--good-soft); }
+.dash-stat-value { font-size: 20px; font-weight: 700; }
+.dash-stat.good .dash-stat-value { color: var(--good); }
+.dash-stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .03em; margin-top: 2px; }
+
+.task-row .ff-name { flex: 0 1 auto; max-width: 40%; }
+.task-chips { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; }
+.task-chip {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 /* ───────────────────────── Context menu ───────────────────────── */
 
 .context-menu {

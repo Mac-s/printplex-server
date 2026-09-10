@@ -565,6 +565,7 @@ function renderSidebar() {
       body += `<button class="filter-clear" data-action="clear" data-key="shopify">Effacer la sélection</button>`;
     }
     body += filterItemHtml({ icon: "🧩", label: "Produits sans projet", count: unmatchedShopifyProducts().length, active: state.filter.type === "shopifyOrphans", action: "shopifyOrphans" });
+    body += filterItemHtml({ icon: "📋", label: "Tâches à faire", count: shopifyTaskEntries().length, active: state.filter.type === "shopifyTasks", action: "shopifyTasks" });
     html += groupHtml("shopify", "Shopify", body);
   }
 
@@ -633,6 +634,7 @@ function wireSidebarEvents() {
       case "todo": setSingleFilter("todo"); break;
       case "kind": setSingleFilter("kind", btn.dataset.value); break;
       case "shopifyOrphans": setSingleFilter("shopifyOrphans"); break;
+      case "shopifyTasks": setSingleFilter("shopifyTasks"); break;
       case "multi": toggleMultiFilter(btn.dataset.key, btn.dataset.value); break;
       case "clear": clearMultiFilter(btn.dataset.key); break;
       case "clearAll": clearAllFilters(); break;
@@ -748,6 +750,10 @@ function renderGrid() {
   }
   if (state.filter.type === "shopifyOrphans") {
     renderShopifyOrphansList(detail);
+    return;
+  }
+  if (state.filter.type === "shopifyTasks") {
+    renderShopifyTasksView(detail);
     return;
   }
 
@@ -896,6 +902,121 @@ function shopifyOrphanRowHtml(product) {
       <span class="ff-size">${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}${price != null ? ` · ${formatEur(price)}` : ""}</span>
       <a class="btn btn-sm" href="https://${escapeHtml(state.shopifyStoreDomain)}/products/${escapeHtml(product.handle)}" target="_blank" rel="noopener">Voir</a>
     </div>`;
+}
+
+// ── Shopify tasks dashboard ──
+// Purely derived from state.shopifyProducts (already fully loaded client-side
+// via /api/shopify/products, bodyHtml/images/variants/metafields included) —
+// no dedicated backend endpoint needed.
+
+const SHOPIFY_TASK_DEFS = [
+  { key: "description", icon: "📝", label: "Description" },
+  { key: "seo", icon: "🔍", label: "SEO" },
+  { key: "photos", icon: "📷", label: "Photos" },
+  { key: "price", icon: "💰", label: "Prix" },
+  { key: "category", icon: "🏷️", label: "Catégorie" },
+  { key: "publish", icon: "🚀", label: "Publication" },
+];
+const SHOPIFY_TASK_LABEL = Object.fromEntries(SHOPIFY_TASK_DEFS.map((d) => [d.key, d]));
+
+function shopifyProductHasSeo(p) {
+  return (p.metafields || []).some((m) => m.namespace === "global" && (m.key === "title_tag" || m.key === "description_tag") && (m.value || "").trim());
+}
+function shopifyProductHasPrice(p) {
+  return (p.variants || []).some((v) => parseFloat(v.price || "0") > 0);
+}
+function shopifyProductHasCategory(p) {
+  return Boolean(p.category) || Boolean((p.productType || "").trim());
+}
+// Missing-task keys for one product, "publish" only surfacing once every
+// other task is already done (no point flagging "ready to publish" on a
+// product that's still missing its description).
+function shopifyProductMissingTasks(p) {
+  const ok = {
+    description: (p.bodyHtml || "").trim().length > 20,
+    seo: shopifyProductHasSeo(p),
+    photos: (p.images || []).length > 0,
+    price: shopifyProductHasPrice(p),
+    category: shopifyProductHasCategory(p),
+  };
+  const missing = Object.keys(ok).filter((k) => !ok[k]);
+  if (missing.length === 0 && p.status !== "active") missing.push("publish");
+  return missing;
+}
+
+function shopifyTaskEntries() {
+  return state.shopifyProducts
+    .map((product) => ({ product, missing: shopifyProductMissingTasks(product) }))
+    .filter((e) => e.missing.length > 0)
+    .sort((a, b) => a.missing.length - b.missing.length || a.product.title.localeCompare(b.product.title, "fr"));
+}
+
+function shopifyTaskStatsHtml(entries) {
+  const byTask = Object.fromEntries(SHOPIFY_TASK_DEFS.map((d) => [d.key, entries.filter((e) => e.missing.includes(d.key)).length]));
+  const readyToPublish = byTask.publish;
+  const cards = [
+    { value: state.shopifyProducts.length, label: "produits synchronisés" },
+    { value: entries.length, label: "à compléter" },
+    { value: readyToPublish, label: "prêts à publier", good: true },
+    ...SHOPIFY_TASK_DEFS.filter((d) => d.key !== "publish").map((d) => ({ value: byTask[d.key], label: `${d.icon} ${d.label}` })),
+  ];
+  return `<div class="dash-stats">${cards.map((c) =>
+    `<div class="dash-stat${c.good ? " good" : ""}"><div class="dash-stat-value">${c.value}</div><div class="dash-stat-label">${c.label}</div></div>`
+  ).join("")}</div>`;
+}
+
+function shopifyTaskRowHtml(entry) {
+  const p = entry.product;
+  const chips = entry.missing.map((k) => `<span class="task-chip">${SHOPIFY_TASK_LABEL[k].icon} ${SHOPIFY_TASK_LABEL[k].label}</span>`).join("");
+  return `
+    <div class="flat-file-row task-row">
+      <span class="dot ${p.status === "active" ? "on" : "off"}"></span>
+      <span class="ff-name">${escapeHtml(p.title)}</span>
+      <span class="task-chips">${chips}</span>
+      <a class="btn btn-sm" href="https://${escapeHtml(state.shopifyStoreDomain)}/admin/products/${p.id}" target="_blank" rel="noopener">Ouvrir</a>
+    </div>`;
+}
+
+function renderShopifyTasksView(detail) {
+  const entries = shopifyTaskEntries();
+  let html = shopifyTaskStatsHtml(entries);
+
+  if (entries.length === 0) {
+    html += `
+      <div class="empty-state">
+        <div class="es-icon">✅</div>
+        <h2>Tout est prêt</h2>
+        <p>Tous les produits Shopify synchronisés ont leur description, SEO, photos, prix et catégorie renseignés.</p>
+      </div>`;
+    detail.innerHTML = html;
+    return;
+  }
+
+  // Priority: whatever needs the fewest remaining tasks first — the
+  // quickest wins, so the list itself doubles as the suggestion.
+  const priority = entries.slice(0, 8);
+  const rest = entries.slice(8);
+
+  html += `
+    <div class="grid-section">
+      <div class="grid-section-header">
+        <div class="grid-section-title">🎯 Priorité — le moins de travail restant</div>
+        <div class="grid-section-count">${priority.length}</div>
+      </div>
+      <div class="flat-file-list">${priority.map(shopifyTaskRowHtml).join("")}</div>
+    </div>`;
+  if (rest.length > 0) {
+    html += `
+      <div class="grid-section">
+        <div class="grid-section-header">
+          <div class="grid-section-title">Autres produits à compléter</div>
+          <div class="grid-section-count">${rest.length}</div>
+        </div>
+        <div class="flat-file-list">${rest.map(shopifyTaskRowHtml).join("")}</div>
+      </div>`;
+  }
+
+  detail.innerHTML = html;
 }
 
 // ── Unsorted files banner ──
