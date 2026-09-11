@@ -634,7 +634,7 @@ function wireSidebarEvents() {
       case "todo": setSingleFilter("todo"); break;
       case "kind": setSingleFilter("kind", btn.dataset.value); break;
       case "shopifyOrphans": setSingleFilter("shopifyOrphans"); break;
-      case "shopifyTasks": setSingleFilter("shopifyTasks"); break;
+      case "shopifyTasks": openShopifyTasksView(); break;
       case "multi": toggleMultiFilter(btn.dataset.key, btn.dataset.value); break;
       case "clear": clearMultiFilter(btn.dataset.key); break;
       case "clearAll": clearAllFilters(); break;
@@ -975,6 +975,33 @@ function shopifyTaskRowHtml(entry) {
       <span class="task-chips">${chips}</span>
       <a class="btn btn-sm" href="https://${escapeHtml(state.shopifyStoreDomain)}/admin/products/${p.id}" target="_blank" rel="noopener">Ouvrir</a>
     </div>`;
+}
+
+// state.shopifyProducts is fetched once at app startup and the server's own
+// Shopify cache only syncs on its very first access (see ShopifyCache.
+// productsSyncingIfNeeded) — so without an explicit re-sync here, this view
+// would keep showing a product as needing "Publication" long after it was
+// actually published (in this app or directly on Shopify).
+async function openShopifyTasksView() {
+  state.filter = { type: "shopifyTasks" };
+  clearAllMultiSelects();
+  state.view = "grid";
+  state.selectedId = null;
+  setDetailWide(true);
+  setSettingsButtonActive(false);
+  renderSidebar();
+
+  const detail = document.getElementById("detail");
+  detail.innerHTML = `<div class="placeholder">Synchronisation avec Shopify…</div>`;
+  try {
+    await api("/api/shopify/sync", { method: "POST" });
+    state.shopifyProducts = await api("/api/shopify/products");
+  } catch (_) {
+    // Sync failed (offline, bad credentials…) — fall back to whatever was
+    // already loaded rather than blocking the view entirely.
+  }
+  renderSidebar();
+  renderShopifyTasksView(detail);
 }
 
 function renderShopifyTasksView(detail) {
