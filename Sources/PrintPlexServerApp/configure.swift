@@ -84,6 +84,22 @@ func configure(_ app: Application) async throws {
     // the only cost is everyone being logged out on a restart, which is a
     // reasonable trade for not needing a sessions table.
     app.sessions.use(.memory)
+
+    // Registered `.beginning` so it intercepts CORS preflight (OPTIONS)
+    // requests before AuthMiddleware runs — third-party clients calling
+    // /api/mcp with a custom X-API-Key header (browser-based MCP connectors
+    // included) trigger a preflight that carries none of that header, so it
+    // must succeed on its own rather than being rejected as unauthenticated.
+    let corsConfiguration = CORSMiddleware.Configuration(
+        allowedOrigin: .all,
+        allowedMethods: [.GET, .POST, .PUT, .PATCH, .DELETE, .OPTIONS],
+        allowedHeaders: [
+            .accept, .authorization, .contentType, .origin, .userAgent,
+            .init("X-API-Key"), .init("Mcp-Session-Id"), .init("Last-Event-ID"),
+        ]
+    )
+    app.middleware.use(CORSMiddleware(configuration: corsConfiguration), at: .beginning)
+
     app.middleware.use(app.sessions.middleware)
     app.middleware.use(NoStoreAPIMiddleware())
     app.middleware.use(AuthMiddleware())
