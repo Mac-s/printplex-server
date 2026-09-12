@@ -90,13 +90,19 @@ func configure(_ app: Application) async throws {
     // /api/mcp with a custom X-API-Key header (browser-based MCP connectors
     // included) trigger a preflight that carries none of that header, so it
     // must succeed on its own rather than being rejected as unauthenticated.
+    // `.originBased` (reflects the caller's actual Origin) rather than `.all`
+    // (a literal "*") — the CORS spec forbids "*" on a credentialed request,
+    // so if the client's fetch ever sends credentials, a wildcard origin
+    // makes the browser discard the response even though the header is
+    // present, which looks identical to the server being unreachable.
     let corsConfiguration = CORSMiddleware.Configuration(
-        allowedOrigin: .all,
+        allowedOrigin: .originBased,
         allowedMethods: [.GET, .POST, .PUT, .PATCH, .DELETE, .OPTIONS],
         allowedHeaders: [
             .accept, .authorization, .contentType, .origin, .userAgent,
             .init("X-API-Key"), .init("Mcp-Session-Id"), .init("Last-Event-ID"),
-        ]
+        ],
+        allowCredentials: true
     )
     app.middleware.use(CORSMiddleware(configuration: corsConfiguration), at: .beginning)
 
