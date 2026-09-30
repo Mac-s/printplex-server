@@ -1487,6 +1487,14 @@ function wireProjectDetailEvents(project) {
       if (!q) return [];
       const all = new Set(state.projects.flatMap((p) => p.tags || []));
       return [...all].filter((v) => v.toLowerCase().includes(q) && !(project.tags || []).includes(v)).slice(0, 8);
+    },
+    (value) => {
+      const normalized = normalizeForFuzzyMatch(value);
+      const allTags = new Set(state.projects.flatMap((p) => p.tags || []));
+      for (const existing of allTags) {
+        if (existing !== value && normalizeForFuzzyMatch(existing) === normalized) return existing;
+      }
+      return null;
     });
 
   wireSourceSection(project);
@@ -1568,12 +1576,21 @@ function chipEditorHtml(containerId, label, icon, items, colorClass) {
         ${items.map((v) => `<span class="chip ${colorClass}">${escapeHtml(v)}<button class="chip-remove" data-remove="${escapeHtml(v)}">×</button></span>`).join("")}
         <input class="chip-input" id="${containerId}Input" placeholder="Ajouter…" autocomplete="off" />
       </div>
+      <div class="message warn chip-warning" id="${containerId}Warning" hidden></div>
     </div>`;
 }
 
-function wireChipEditor(containerId, currentItems, onChange, suggestionsFn) {
+// Accents + naive French plural stripped, so "Echec" and "Échecs" compare
+// equal — catches the exact drift the tag lint bilan flagged (Echec vs
+// Échecs, singulier vs pluriel) without needing a real stemmer.
+function normalizeForFuzzyMatch(value) {
+  return value.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/s$/, "");
+}
+
+function wireChipEditor(containerId, currentItems, onChange, suggestionsFn, warnFn) {
   const container = document.getElementById(containerId);
   const input = document.getElementById(`${containerId}Input`);
+  const warning = document.getElementById(`${containerId}Warning`);
 
   container.addEventListener("click", (evt) => {
     const btn = evt.target.closest("[data-remove]");
@@ -1584,6 +1601,12 @@ function wireChipEditor(containerId, currentItems, onChange, suggestionsFn) {
   function commit() {
     const value = input.value.trim();
     if (!value || currentItems.includes(value)) { input.value = ""; return; }
+    if (warning) warning.hidden = true;
+    const near = warnFn?.(value);
+    if (near && warning) {
+      warning.textContent = `⚠️ Ressemble à « ${near} » déjà utilisé — ajouté quand même.`;
+      warning.hidden = false;
+    }
     onChange([...currentItems, value]);
   }
   input.addEventListener("keydown", (evt) => {

@@ -678,6 +678,7 @@ button, input, select, textarea { font-family: inherit; font-size: 14px; }
 .message { font-size: 13px; padding: 8px 10px; border-radius: 8px; margin-top: 8px; }
 .message.ok { background: var(--good-soft); color: var(--good); }
 .message.err { background: var(--danger-soft); color: var(--danger); }
+.message.warn { background: var(--accent-soft); color: var(--accent); }
 
 /* ───────────────────────── Settings ───────────────────────── */
 
