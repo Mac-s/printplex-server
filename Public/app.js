@@ -88,6 +88,68 @@ function escapeHtml(s) {
   }[c]));
 }
 
+// Allowlist sanitizer for the rich description/notes editor (Lot 5) — kept
+// deliberately small (7 tags) rather than pulling in a full HTML-parsing
+// dependency. This is the client-side half (on paste + before every save);
+// the server re-sanitizes independently since this field ends up on Shopify
+// and the client can't be trusted to enforce it.
+const RICH_HTML_ALLOWED_TAGS = new Set(["P", "STRONG", "EM", "BR", "UL", "LI", "A"]);
+const RICH_HTML_TAG_RENAME = { B: "STRONG", I: "EM" };
+function sanitizeRichHtml(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html || "";
+  template.content.querySelectorAll("script, style").forEach((el) => el.remove()); // drop tag + content, not just the tag
+  // A manual pointer-walk rather than `for (const c of Array.from(...))`:
+  // unwrapping a disallowed tag (e.g. a pasted <div> or <script>) moves its
+  // children up to become new siblings, and a pre-snapshotted child list
+  // would skip straight past them unvisited — which let a <script>/<img
+  // onerror> nested inside a stripped wrapper survive sanitization entirely.
+  const walk = (parent) => {
+    let child = parent.firstChild;
+    while (child) {
+      const next = child.nextSibling;
+      if (child.nodeType === Node.TEXT_NODE) { child = next; continue; }
+      if (child.nodeType !== Node.ELEMENT_NODE) { parent.removeChild(child); child = next; continue; }
+
+      const renamed = RICH_HTML_TAG_RENAME[child.tagName];
+      if (renamed) {
+        const replacement = document.createElement(renamed.toLowerCase());
+        while (child.firstChild) replacement.appendChild(child.firstChild);
+        parent.replaceChild(replacement, child);
+        walk(replacement);
+        child = next;
+        continue;
+      }
+      if (!RICH_HTML_ALLOWED_TAGS.has(child.tagName)) {
+        let firstUnwrapped = null;
+        while (child.firstChild) {
+          const c = child.firstChild;
+          parent.insertBefore(c, child);
+          if (!firstUnwrapped) firstUnwrapped = c;
+        }
+        parent.removeChild(child);
+        child = firstUnwrapped || next; // re-scan the freed children too
+        continue;
+      }
+      if (child.tagName === "A") {
+        const href = child.getAttribute("href") || "";
+        const isSafe = /^https?:/i.test(href) || href.startsWith("mailto:");
+        for (const attr of Array.from(child.attributes)) {
+          if (!["href", "title", "target"].includes(attr.name)) child.removeAttribute(attr.name);
+        }
+        if (isSafe) child.setAttribute("rel", "noopener noreferrer");
+        else child.removeAttribute("href");
+      } else {
+        for (const attr of Array.from(child.attributes)) child.removeAttribute(attr.name);
+      }
+      walk(child);
+      child = next;
+    }
+  };
+  walk(template.content);
+  return template.innerHTML;
+}
+
 function formatBytes(n) {
   if (!n) return "0 o";
   const units = ["o", "Ko", "Mo", "Go"];
@@ -1227,6 +1289,15 @@ const ESTIMATE_MATERIAL_KEY = "printplex_estimate_material_id";
 // from a Mac and a PC has a different answer, so this lives in localStorage
 // rather than in Réglages (was server-side before, see git history).
 const LOCAL_ROOT_PATH_KEY = "printplex_local_root_path";
+// Rendered-vs-HTML display preference for the rich editor (Lot 5) — a
+// per-browser UI preference, not project data, so localStorage like the key above.
+const DESC_EDITOR_MODE_KEY = "printplex_desc_editor_mode";
+function getDescEditorMode() {
+  return localStorage.getItem(DESC_EDITOR_MODE_KEY) === "html" ? "html" : "rendered";
+}
+function setDescEditorMode(mode) {
+  localStorage.setItem(DESC_EDITOR_MODE_KEY, mode);
+}
 
 function localRootPath() {
   return localStorage.getItem(LOCAL_ROOT_PATH_KEY) || "";
@@ -1383,6 +1454,86 @@ function flushDetailSave(projectId, getPatch) {
     .catch((e) => console.error("Échec de l'enregistrement automatique", e));
 }
 
+// ── Rich HTML editor (Lot 5) — shared by description and notes ──
+// Two modes on one field: a contenteditable "rendered" view with a minimal
+// toolbar, and a raw-HTML textarea, toggled via `.rich-editor-toggle` and
+// remembered in localStorage. `document.execCommand` is deprecated but still
+// the only vanilla-JS way to do rich editing without a CDN dependency.
+
+function richEditorHtml(idPrefix, placeholder) {
+  return `
+    <div class="rich-editor" id="${idPrefix}Editor">
+      <div class="rich-editor-toolbar">
+        <button type="button" data-cmd="bold" title="Gras"><b>G</b></button>
+        <button type="button" data-cmd="italic" title="Italique"><i>I</i></button>
+        <button type="button" data-cmd="insertUnorderedList" title="Liste">☰</button>
+        <button type="button" data-cmd="createLink" title="Lien">🔗</button>
+        <button type="button" data-cmd="formatBlock" data-value="p" title="Paragraphe">¶</button>
+        <span class="rich-editor-spacer"></span>
+        <button type="button" class="rich-editor-toggle" title="Basculer rendu / HTML">&lt;/&gt;</button>
+      </div>
+      <div class="rich-editor-rendered" contenteditable="true" data-placeholder="${escapeHtml(placeholder || "")}"></div>
+      <textarea class="rich-editor-html" spellcheck="false" placeholder="${escapeHtml(placeholder || "")}"></textarea>
+    </div>`;
+}
+
+function wireRichEditor(idPrefix, initialHtml, onSave) {
+  const root = document.getElementById(`${idPrefix}Editor`);
+  if (!root) return;
+  const rendered = root.querySelector(".rich-editor-rendered");
+  const htmlArea = root.querySelector(".rich-editor-html");
+
+  rendered.innerHTML = initialHtml || "";
+  htmlArea.value = initialHtml || "";
+
+  const applyMode = (mode) => {
+    root.classList.toggle("mode-html", mode === "html");
+    if (mode === "html") htmlArea.value = rendered.innerHTML;
+    else rendered.innerHTML = sanitizeRichHtml(htmlArea.value);
+  };
+  applyMode(getDescEditorMode());
+
+  const save = () => {
+    const html = root.classList.contains("mode-html") ? htmlArea.value : sanitizeRichHtml(rendered.innerHTML);
+    onSave(html);
+  };
+
+  root.querySelector(".rich-editor-toggle").addEventListener("click", () => {
+    save();
+    const next = root.classList.contains("mode-html") ? "rendered" : "html";
+    setDescEditorMode(next);
+    applyMode(next);
+  });
+
+  root.querySelectorAll(".rich-editor-toolbar button[data-cmd]").forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => e.preventDefault()); // keep selection in the editor
+    btn.addEventListener("click", () => {
+      rendered.focus();
+      const cmd = btn.dataset.cmd;
+      if (cmd === "createLink") {
+        const url = prompt("URL du lien :", "https://");
+        if (!url) return;
+        document.execCommand("createLink", false, url);
+      } else {
+        document.execCommand(cmd, false, btn.dataset.value || null);
+      }
+      scheduleDetailSave(save);
+    });
+  });
+
+  rendered.addEventListener("input", () => scheduleDetailSave(save));
+  rendered.addEventListener("blur", save);
+  rendered.addEventListener("paste", (e) => {
+    e.preventDefault();
+    const clip = e.clipboardData || window.clipboardData;
+    const pasted = clip.getData("text/html") || clip.getData("text/plain").replace(/\n/g, "<br>");
+    document.execCommand("insertHTML", false, sanitizeRichHtml(pasted));
+  });
+
+  htmlArea.addEventListener("input", () => scheduleDetailSave(save));
+  htmlArea.addEventListener("blur", save);
+}
+
 function getPersistedEstimatePrinterId() {
   const saved = localStorage.getItem(ESTIMATE_PRINTER_KEY);
   return (saved && state.printers.some((p) => p.id === saved)) ? saved : state.printers[0]?.id;
@@ -1426,7 +1577,7 @@ function renderProjectDetail(project) {
         <input class="detail-name-input" id="detailNameInput" value="${escapeHtml(project.name)}" placeholder="Nom du projet" />
         <span class="cloud-badge">☁️ Local</span>
       </div>
-      <textarea class="detail-desc-input" id="detailDescInput" placeholder="Description…" rows="2">${escapeHtml(project.projectDescription ?? "")}</textarea>
+      ${richEditorHtml("detailDesc", "Description…")}
       <div class="detail-stats-row">
         <span>🧊 ${modelParts.length} pièce${modelParts.length === 1 ? "" : "s"}</span>
         <span>📄 ${files.length} fichier${files.length === 1 ? "" : "s"}</span>
@@ -1534,7 +1685,6 @@ function wireProjectDetailEvents(project) {
 
 function wireHeaderAutosave(project) {
   const nameInput = document.getElementById("detailNameInput");
-  const descInput = document.getElementById("detailDescInput");
 
   const saveName = () => {
     const value = nameInput.value.trim();
@@ -1544,9 +1694,10 @@ function wireHeaderAutosave(project) {
   nameInput.addEventListener("input", () => scheduleDetailSave(saveName));
   nameInput.addEventListener("blur", saveName);
 
-  const saveDesc = () => flushDetailSave(project.id, () => ({ projectDescription: descInput.value }));
-  descInput.addEventListener("input", () => scheduleDetailSave(saveDesc));
-  descInput.addEventListener("blur", saveDesc);
+  wireRichEditor("detailDesc", project.projectDescription ?? "",
+    (html) => flushDetailSave(project.id, () => ({ projectDescription: html })));
+  wireRichEditor("detailNotes", project.notes ?? "",
+    (html) => flushDetailSave(project.id, () => ({ notes: html })));
 }
 
 // ── Metadata (creator/category, with autocomplete drawn from other projects) ──
@@ -1650,8 +1801,7 @@ async function updateChipField(project, field, newList) {
 // ── Notes ──
 
 function notesSectionHtml(project) {
-  if (!project.notes) return "";
-  return `<div class="section"><div class="section-title">📝 Notes</div><p class="detail-notes">${escapeHtml(project.notes)}</p></div>`;
+  return `<div class="section"><div class="section-title">📝 Notes</div>${richEditorHtml("detailNotes", "Notes…")}</div>`;
 }
 
 // ── Source (link back to the design's original page + hardware it needs) ──

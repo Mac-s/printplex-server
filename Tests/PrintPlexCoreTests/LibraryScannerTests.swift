@@ -137,6 +137,67 @@ final class LibraryScannerTests: XCTestCase {
         XCTAssertEqual(projects.first?.info?.nom, "Nom Personnalisé")
     }
 
+    // MARK: - Lot 6: stray note file recovery
+
+    func testRecoversStrayNoteFileIntoNotesWhenDescriptionAndNotesAreMissing() async throws {
+        try write("Groupe/SansDescription/info.json", #"{"nom": "Sans Description"}"#)
+        try write("Groupe/SansDescription/piece.stl")
+        try write("Groupe/SansDescription/READ BEFORE PRINTING.txt", "Imprimer en PETG, pas en PLA.")
+
+        let projects = await collectEvents().compactMap { event -> ScannedProject? in
+            if case .projectDiscovered(let p, _) = event { return p }
+            return nil
+        }
+
+        XCTAssertEqual(projects.first?.info?.notes, "Imprimer en PETG, pas en PLA.")
+        XCTAssertNil(projects.first?.info?.description) // never written to description
+
+        // Persisted to info.json on disk too, not just the in-memory event.
+        let infoURL = root.appendingPathComponent("Groupe/SansDescription/info.json")
+        let onDisk = try JSONDecoder().decode(ProjectInfo.self, from: Data(contentsOf: infoURL))
+        XCTAssertEqual(onDisk.notes, "Imprimer en PETG, pas en PLA.")
+    }
+
+    func testDoesNotOverwriteExistingDescription() async throws {
+        try write("Groupe/AvecDescription/info.json", #"{"nom": "Avec Description", "description": "Déjà décrit."}"#)
+        try write("Groupe/AvecDescription/piece.stl")
+        try write("Groupe/AvecDescription/note license.txt", "Contenu de licence.")
+
+        let projects = await collectEvents().compactMap { event -> ScannedProject? in
+            if case .projectDiscovered(let p, _) = event { return p }
+            return nil
+        }
+
+        XCTAssertEqual(projects.first?.info?.description, "Déjà décrit.")
+        XCTAssertNil(projects.first?.info?.notes)
+    }
+
+    func testDoesNotOverwriteExistingNotes() async throws {
+        try write("Groupe/AvecNotes/info.json", #"{"nom": "Avec Notes", "notes": "Brouillon SEO déjà écrit."}"#)
+        try write("Groupe/AvecNotes/piece.stl")
+        try write("Groupe/AvecNotes/Link to Monitor Stand.txt", "https://example.com/monitor-stand")
+
+        let projects = await collectEvents().compactMap { event -> ScannedProject? in
+            if case .projectDiscovered(let p, _) = event { return p }
+            return nil
+        }
+
+        XCTAssertEqual(projects.first?.info?.notes, "Brouillon SEO déjà écrit.")
+    }
+
+    func testIgnoresStrayNoteFilesNestedBelowProjectRoot() async throws {
+        try write("Groupe/Nested/info.json", #"{"nom": "Nested"}"#)
+        try write("Groupe/Nested/piece.stl")
+        try write("Groupe/Nested/Colored 3mf files/Read Me!!.txt", "Ne concerne que ce sous-dossier.")
+
+        let projects = await collectEvents().compactMap { event -> ScannedProject? in
+            if case .projectDiscovered(let p, _) = event { return p }
+            return nil
+        }
+
+        XCTAssertNil(projects.first?.info?.notes)
+    }
+
     func testKnownPathsFlagAsNotNew() async throws {
         try write("Groupe/Projet/piece.stl")
         let projectPath = root.appendingPathComponent("Groupe/Projet").standardizedFileURL.path

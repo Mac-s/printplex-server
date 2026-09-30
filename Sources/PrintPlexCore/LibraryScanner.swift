@@ -214,7 +214,20 @@ public enum LibraryScanner {
                 for folderPath in projectFolders.sorted() {
                     let folderURL = URL(fileURLWithPath: folderPath)
 
-                    let info = Self.parseProjectInfo(in: folderURL)
+                    var info = Self.parseProjectInfo(in: folderURL)
+
+                    // Lot 6: recover a stray note file's content into `notes`,
+                    // but only when neither `description` nor `notes` already
+                    // holds something — both fields are already in active use
+                    // elsewhere (hand-written descriptions, Shopify SEO drafts
+                    // in `notes`), so this must fire once and never clobber.
+                    let hasDescription = !(info?.description?.isEmpty ?? true)
+                    let hasNotes = !(info?.notes?.isEmpty ?? true)
+                    if !hasDescription, !hasNotes,
+                       let recovered = Self.recoverStrayNoteFileContent(in: folderURL) {
+                        try? Self.updateProjectInfo(in: folderPath) { $0.notes = recovered }
+                        info = Self.parseProjectInfo(in: folderURL)
+                    }
 
                     continuation.yield(.projectDiscovered(
                         ScannedProject(
@@ -312,6 +325,34 @@ public enum LibraryScanner {
         let infoURL = folderURL.appendingPathComponent("info.json")
         guard let data = try? Data(contentsOf: infoURL) else { return nil }
         return try? JSONDecoder().decode(ProjectInfo.self, from: data)
+    }
+
+    /// A short stray text file at a project's root (`README`, `note license.txt`,
+    /// `READ BEFORE PRINTING.txt`, `Link to ....txt`, etc.) often carries the
+    /// licensing/print info a Patreon-sourced project never got in its
+    /// `info.json`. Only direct children are considered (a few real ones sit a
+    /// level deeper, e.g. inside a "Colored 3mf files" subfolder — those are
+    /// asset-specific, not project-level notes).
+    private static let strayNoteMaxSize = 4096
+
+    private static func recoverStrayNoteFileContent(in folderURL: URL) -> String? {
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: folderURL, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]
+        ) else { return nil }
+
+        let candidates = children
+            .filter { $0.pathExtension.lowercased() == "txt" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        for url in candidates {
+            guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                  size > 0, size < strayNoteMaxSize,
+                  let data = try? Data(contentsOf: url),
+                  let text = String(data: data, encoding: .utf8) else { continue }
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        return nil
     }
 
     /// Updates the `info.json` file for a project, preserving any unknown keys.

@@ -24,6 +24,82 @@ struct ProjectUpdateRequest: Content {
     var coverImageFileName: String?
 }
 
+/// Small allowlist HTML sanitizer for the description/notes rich editor
+/// (Lot 5). Hand-rolled instead of pulling in an HTML-parsing dependency:
+/// the tag set is fixed and tiny (7 tags), and this content is re-serialized
+/// to Shopify, so it has to be re-checked here even though the client
+/// already sanitizes on paste and before every save — the client can be
+/// bypassed (direct API calls), the server can't.
+enum RichHTMLSanitizer {
+    private static let allowedTags: Set<String> = ["p", "strong", "em", "br", "ul", "li", "a"]
+    private static let tagPattern = try! NSRegularExpression(pattern: "<(/?)([a-zA-Z0-9]+)([^>]*)>", options: [])
+
+    static func sanitize(_ input: String) -> String {
+        var html = stripWithContent(tag: "script", from: input)
+        html = stripWithContent(tag: "style", from: html)
+
+        let ns = html as NSString
+        var result = ""
+        var lastEnd = 0
+        for match in tagPattern.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
+            result += ns.substring(with: NSRange(location: lastEnd, length: match.range.location - lastEnd))
+            lastEnd = match.range.location + match.range.length
+
+            let isClosing = ns.substring(with: match.range(at: 1)) == "/"
+            let name = ns.substring(with: match.range(at: 2)).lowercased()
+            guard allowedTags.contains(name) else { continue } // drop the tag, keep surrounding text
+
+            if isClosing {
+                if name != "br" { result += "</\(name)>" }
+            } else if name == "br" {
+                result += "<br>"
+            } else if name == "a" {
+                result += anchorOpenTag(attrs: ns.substring(with: match.range(at: 3)))
+            } else {
+                result += "<\(name)>"
+            }
+        }
+        result += ns.substring(from: lastEnd)
+        return result
+    }
+
+    private static func stripWithContent(tag: String, from html: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: "<\(tag)\\b[^>]*>.*?</\(tag)>",
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else { return html }
+        let ns = html as NSString
+        return regex.stringByReplacingMatches(in: html, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+    }
+
+    private static func anchorOpenTag(attrs: String) -> String {
+        var out = "<a"
+        if let href = attributeValue(named: "href", in: attrs) {
+            let lowered = href.lowercased()
+            if lowered.hasPrefix("http://") || lowered.hasPrefix("https://") || lowered.hasPrefix("mailto:") {
+                out += " href=\"\(escapeAttribute(href))\" rel=\"noopener noreferrer\""
+            }
+        }
+        if let title = attributeValue(named: "title", in: attrs) { out += " title=\"\(escapeAttribute(title))\"" }
+        if attributeValue(named: "target", in: attrs) == "_blank" { out += " target=\"_blank\"" }
+        return out + ">"
+    }
+
+    private static func attributeValue(named attrName: String, in attrs: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: "\\b\(attrName)\\s*=\\s*\"([^\"]*)\"", options: [.caseInsensitive]) else { return nil }
+        let ns = attrs as NSString
+        guard let match = regex.firstMatch(in: attrs, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        return ns.substring(with: match.range(at: 1))
+    }
+
+    private static func escapeAttribute(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+    }
+}
+
 struct ShopifyMatchResponse: Content {
     var product: ShopifyProduct
     var url: String?
@@ -172,15 +248,18 @@ struct ProjectController: RouteCollection {
         // string is the client's way of asking to clear the field (the "À
         // faire" incomplete-metadata check already treats empty as missing,
         // and this is what the sidebar's "Supprimer" context menu sends).
+        let sanitizedDescription = body.projectDescription.map(RichHTMLSanitizer.sanitize)
+        let sanitizedNotes = body.notes.map(RichHTMLSanitizer.sanitize)
+
         if let v = body.name { model.name = v }
-        if let v = body.projectDescription { model.projectDescription = v }
+        if let v = sanitizedDescription { model.projectDescription = v }
         if let v = body.category { model.category = v.isEmpty ? nil : v }
         if let v = body.creator { model.creator = v.isEmpty ? nil : v }
         if let v = body.tags { model.tags = v }
         if let v = body.characters { model.characters = v }
         if let v = body.suggestedMaterials { model.suggestedMaterials = v }
         if let v = body.multiColor { model.multiColor = v }
-        if let v = body.notes { model.notes = v }
+        if let v = sanitizedNotes { model.notes = v }
         if let v = body.alreadyPrinted { model.alreadyPrinted = v }
         if let v = body.sourceUrl { model.sourceUrl = v.isEmpty ? nil : v }
         if let v = body.sourceHardware { model.sourceHardware = v }
@@ -196,14 +275,14 @@ struct ProjectController: RouteCollection {
 
         try LibraryScanner.updateProjectInfo(in: model.folderPath) { info in
             if let v = body.name { info.nom = v }
-            if let v = body.projectDescription { info.description = v }
+            if let v = sanitizedDescription { info.description = v }
             if let v = body.category { info.categorie = v.isEmpty ? nil : v }
             if let v = body.creator { info.createur = v.isEmpty ? nil : v }
             if let v = body.tags { info.tags = v }
             if let v = body.characters { info.personnages = v }
             if let v = body.suggestedMaterials { info.materiaux_suggeres = v }
             if let v = body.multiColor { info.multi_couleur = v }
-            if let v = body.notes { info.notes = v }
+            if let v = sanitizedNotes { info.notes = v }
             if let v = body.alreadyPrinted { info.deja_imprime = v }
             if let v = body.sourceUrl { info.source_url = v.isEmpty ? nil : v }
             if let v = body.sourceHardware { info.source_hardware = v }
