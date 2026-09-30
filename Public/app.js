@@ -372,20 +372,36 @@ function countForCandidate(key, value) {
   }).length;
 }
 
-function matchShopifyProduct(projectName, explicitId) {
+// Below this length, a project name (e.g. "Vase", "Casque") is too generic
+// to trust an inclusion match against commercial Shopify titles — it's what
+// produced the known false positive (project "Horloge" ↔ product "Grove -
+// Horloge de Table Design", which is actually a different ForgeCore project).
+const SHOPIFY_NAME_MATCH_MIN_LENGTH = 12;
+
+/// Same lookup as before, plus whether the result came from the (unreliable)
+/// name-based fallback rather than an explicit `shopifyProductId` — callers
+/// that want to warn the user about a guessed match use this; everything
+/// else keeps using the plain `matchShopifyProduct` wrapper below.
+function matchShopifyProductInfo(projectName, explicitId) {
   if (explicitId) {
     const idInt = parseInt(explicitId, 10);
     if (!Number.isNaN(idInt)) {
       const explicit = state.shopifyProducts.find((pr) => pr.id === idInt);
-      if (explicit) return explicit;
+      if (explicit) return { product: explicit, guessed: false };
     }
   }
   const name = (projectName || "").trim().toLowerCase();
-  if (!name) return null;
-  return state.shopifyProducts.find((pr) => {
+  if (name.length < SHOPIFY_NAME_MATCH_MIN_LENGTH) return { product: null, guessed: false };
+  const candidates = state.shopifyProducts.filter((pr) => {
     const title = pr.title.toLowerCase();
     return title.includes(name) || name.includes(title);
-  }) || null;
+  });
+  // Only trust the guess when it's unambiguous — "Brand New Day" matching
+  // several products at once is exactly the other failure mode this guards.
+  return candidates.length === 1 ? { product: candidates[0], guessed: true } : { product: null, guessed: false };
+}
+function matchShopifyProduct(projectName, explicitId) {
+  return matchShopifyProductInfo(projectName, explicitId).product;
 }
 function shopifyStatusOf(p) {
   const product = matchShopifyProduct(p.name, p.shopifyProductId);
@@ -2026,10 +2042,15 @@ function shopifySectionHtml(project) {
         <div id="shopifySectionMessage"></div>
       </div>`;
   }
-  const product = matchShopifyProduct(project.name, project.shopifyProductId);
+  const { product, guessed } = matchShopifyProductInfo(project.name, project.shopifyProductId);
   return `
     <div class="section">
       <div class="section-title">Shopify</div>
+      ${guessed ? `
+        <div class="message hint" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+          <span>🔍 Correspondance devinée par nom, pas encore confirmée.</span>
+          <button class="btn btn-sm" id="btnConfirmShopifyMatch">Confirmer ce produit</button>
+        </div>` : ""}
       ${product ? `
         <div class="shopify-match">
           <span class="dot ${product.status === "active" ? "on" : "off"}"></span>
@@ -2071,6 +2092,19 @@ function shopifySectionHtml(project) {
 }
 
 function wireShopifySection(project) {
+  document.getElementById("btnConfirmShopifyMatch")?.addEventListener("click", async () => {
+    const { product } = matchShopifyProductInfo(project.name, project.shopifyProductId);
+    if (!product) return;
+    const msg = document.getElementById("shopifySectionMessage");
+    try {
+      await api(`/api/projects/${project.id}`, { method: "PATCH", body: JSON.stringify({ shopifyProductId: String(product.id) }) });
+      project.shopifyProductId = String(product.id);
+      updateLocalProject(project.id, { shopifyProductId: String(product.id) });
+      renderProjectDetail(project);
+    } catch (e) {
+      msg.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`;
+    }
+  });
   document.getElementById("shopifyManualSelect")?.addEventListener("change", async (evt) => {
     const value = evt.target.value;
     const msg = document.getElementById("shopifySectionMessage");
@@ -2883,8 +2917,24 @@ function renderShopifyTabHtml(overview) {
       ${overview.shopifySyncError ? `<div class="message err">${escapeHtml(overview.shopifySyncError)}</div>` : ""}
       <div id="shopifySettingsMessage"></div>
       <p class="hint" style="margin-top:12px">Shopify Admin → Paramètres → Apps → Développer des apps. Accordez les permissions read_products (lecture du catalogue) et write_products (nécessaire pour "Dupliquer un produit").</p>
+      ${shopifyUnmatchedSectionHtml()}
     </div>
   `;
+}
+
+/// The real Shopify-side backlog: products live on the store but not yet
+/// linked (explicitly or by a trustworthy name guess) to any project here.
+function shopifyUnmatchedSectionHtml() {
+  if (!state.shopifyProducts.length) return "";
+  const unmatched = unmatchedShopifyProducts();
+  if (!unmatched.length) return "";
+  return `
+    <div class="field" style="margin-top:16px">
+      <label>Produits sans projet (${unmatched.length})</label>
+      <div class="flat-file-list" style="max-height:260px; overflow-y:auto">
+        ${unmatched.map(shopifyOrphanRowHtml).join("")}
+      </div>
+    </div>`;
 }
 
 function wireShopifyTab(overview) {
