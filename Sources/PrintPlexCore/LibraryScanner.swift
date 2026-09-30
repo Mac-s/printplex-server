@@ -360,6 +360,7 @@ public enum LibraryScanner {
             "categorie": info.categorie,
             "createur": info.createur,
             "tags": info.tags,
+            "personnages": info.personnages,
             "fichiers": info.fichiers,
             "materiaux_suggeres": info.materiaux_suggeres,
             "multi_couleur": info.multi_couleur,

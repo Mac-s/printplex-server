@@ -993,6 +993,7 @@ button.entity-row:hover { border-color: var(--accent); }
 .chip-list .chip { display: inline-flex; align-items: center; gap: 5px; }
 .chip-material { background: rgba(224, 133, 26, .15); color: #d17a1f; }
 .chip-tag { background: var(--accent-soft); color: var(--accent); }
+.chip-character { background: rgba(155, 89, 182, .15); color: #9b59b6; }
 .chip-remove {
   border: none;
   background: none;

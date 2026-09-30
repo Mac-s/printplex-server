@@ -8,6 +8,7 @@ struct ProjectUpdateRequest: Content {
     var category: String?
     var creator: String?
     var tags: [String]?
+    var characters: [String]?
     var suggestedMaterials: [String]?
     var multiColor: Bool?
     var notes: String?
@@ -36,6 +37,7 @@ struct ProjectListQuery: Content {
     var category: String?
     var creator: String?
     var tag: String?
+    var character: String?
     var search: String?
     var limit: Int?
     var offset: Int?
@@ -51,6 +53,7 @@ struct ProjectListItem: Content {
     var category: String?
     var creator: String?
     var tags: [String]
+    var characters: [String]
     var totalFileCount: Int
 }
 
@@ -112,6 +115,9 @@ struct ProjectController: RouteCollection {
         if let tag = query.tag, !tag.isEmpty {
             items = items.filter { $0.tags.contains(tag) }
         }
+        if let character = query.character, !character.isEmpty {
+            items = items.filter { $0.characters.contains(character) }
+        }
         if let search = query.search, !search.isEmpty {
             let needle = search.lowercased()
             items = items.filter { project in
@@ -119,6 +125,7 @@ struct ProjectController: RouteCollection {
                     || (project.category ?? "").lowercased().contains(needle)
                     || (project.creator ?? "").lowercased().contains(needle)
                     || project.tags.contains { $0.lowercased().contains(needle) }
+                    || project.characters.contains { $0.lowercased().contains(needle) }
             }
         }
 
@@ -127,7 +134,7 @@ struct ProjectController: RouteCollection {
         let offset = max(query.offset ?? 0, 0)
         let page = items.dropFirst(offset).prefix(limit).map { project in
             ProjectListItem(id: project.id, name: project.name, category: project.category,
-                             creator: project.creator, tags: project.tags,
+                             creator: project.creator, tags: project.tags, characters: project.characters,
                              totalFileCount: project.totalFileCount)
         }
         return ProjectListPage(items: Array(page), total: total, limit: limit, offset: offset)
@@ -170,6 +177,7 @@ struct ProjectController: RouteCollection {
         if let v = body.category { model.category = v.isEmpty ? nil : v }
         if let v = body.creator { model.creator = v.isEmpty ? nil : v }
         if let v = body.tags { model.tags = v }
+        if let v = body.characters { model.characters = v }
         if let v = body.suggestedMaterials { model.suggestedMaterials = v }
         if let v = body.multiColor { model.multiColor = v }
         if let v = body.notes { model.notes = v }
@@ -192,6 +200,7 @@ struct ProjectController: RouteCollection {
             if let v = body.category { info.categorie = v.isEmpty ? nil : v }
             if let v = body.creator { info.createur = v.isEmpty ? nil : v }
             if let v = body.tags { info.tags = v }
+            if let v = body.characters { info.personnages = v }
             if let v = body.suggestedMaterials { info.materiaux_suggeres = v }
             if let v = body.multiColor { info.multi_couleur = v }
             if let v = body.notes { info.notes = v }

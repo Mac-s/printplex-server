@@ -17,6 +17,11 @@ final class ProjectModel: Model, @unchecked Sendable {
     @OptionalField(key: "category") var category: String?
     @OptionalField(key: "creator") var creator: String?
     @Field(key: "tags") var tags: [String]
+    // Optional like source_hardware/source_instruction_images (not @Field
+    // like tags): existing rows predate this column and would have no value
+    // for a required one. The DTO still exposes it as a plain array (see
+    // toDTO()), same trick.
+    @OptionalField(key: "characters") var characters: [String]?
     @Field(key: "suggested_materials") var suggestedMaterials: [String]
     @OptionalField(key: "multi_color") var multiColor: Bool?
     @OptionalField(key: "notes") var notes: String?
@@ -46,6 +51,7 @@ final class ProjectModel: Model, @unchecked Sendable {
         if let c = info.categorie { category = c }
         if let c = info.createur { creator = c }
         if let t = info.tags { tags = t }
+        if let c = info.personnages { characters = c }
         if let m = info.materiaux_suggeres { suggestedMaterials = m }
         if let mc = info.multi_couleur { multiColor = mc }
         if let n = info.notes { notes = n }
@@ -73,6 +79,7 @@ final class ProjectModel: Model, @unchecked Sendable {
             category: category,
             creator: creator,
             tags: tags,
+            characters: characters ?? [],
             suggestedMaterials: suggestedMaterials,
             multiColor: multiColor,
             notes: notes,

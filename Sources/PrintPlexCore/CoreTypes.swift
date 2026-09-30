@@ -91,6 +91,11 @@ public struct ProjectInfo: Sendable, Codable {
     public var categorie: String?
     public var createur: String?
     public var tags: [String]?
+    /// Character names (Luigi, Bane, Jean Grey…) — split out of `tags`
+    /// because most of them only ever apply to a single project, which was
+    /// drowning the cross-cutting tags (object type, technique, medium) in
+    /// the sidebar filter list.
+    public var personnages: [String]?
     public var fichiers: [String]?
     public var materiaux_suggeres: [String]?
     public var multi_couleur: Bool?
@@ -123,6 +128,7 @@ public struct ProjectInfo: Sendable, Codable {
                 categorie: String? = nil,
                 createur: String? = nil,
                 tags: [String]? = nil,
+                personnages: [String]? = nil,
                 fichiers: [String]? = nil,
                 materiaux_suggeres: [String]? = nil,
                 multi_couleur: Bool? = nil,
@@ -140,6 +146,7 @@ public struct ProjectInfo: Sendable, Codable {
         self.categorie = categorie
         self.createur = createur
         self.tags = tags
+        self.personnages = personnages
         self.fichiers = fichiers
         self.materiaux_suggeres = materiaux_suggeres
         self.multi_couleur = multi_couleur

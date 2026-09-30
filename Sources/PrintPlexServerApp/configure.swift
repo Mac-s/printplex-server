@@ -41,6 +41,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddScrapeStatusToProjects())
     app.migrations.add(AddLocalMediaPathToSettings())
     app.migrations.add(AddAuthToSettings())
+    app.migrations.add(AddCharactersToProjects())
     try await app.autoMigrate()
 
     try await seedReferenceDataIfNeeded(app)

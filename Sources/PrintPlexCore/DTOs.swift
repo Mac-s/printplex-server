@@ -158,6 +158,8 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
     public var category: String?
     public var creator: String?
     public var tags: [String]
+    /// Character names — split out of `tags` (see `ProjectInfo.personnages`).
+    public var characters: [String]
     public var suggestedMaterials: [String]
     public var multiColor: Bool?
     public var notes: String?
@@ -204,6 +206,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
                 lastModifiedAt: Date = Date(), dateAdded: Date = Date(),
                 coverImageFileName: String? = nil, projectDescription: String? = nil,
                 category: String? = nil, creator: String? = nil, tags: [String] = [],
+                characters: [String] = [],
                 suggestedMaterials: [String] = [], multiColor: Bool? = nil,
                 notes: String? = nil, alreadyPrinted: Bool? = nil,
                 sourceUrl: String? = nil, sourceHardware: [String] = [],
@@ -224,6 +227,7 @@ public struct ProjectDTO: Codable, Sendable, Identifiable {
         self.category = category
         self.creator = creator
         self.tags = tags
+        self.characters = characters
         self.suggestedMaterials = suggestedMaterials
         self.multiColor = multiColor
         self.notes = notes

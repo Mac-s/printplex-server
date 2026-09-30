@@ -24,7 +24,7 @@ const state = {
   // non-empty, ANDed together across fields (e.g. creator=ForgeCore AND printed=true).
   filter: { type: "all" },
   selected: {
-    category: new Set(), tag: new Set(), material: new Set(), creator: new Set(),
+    category: new Set(), tag: new Set(), character: new Set(), material: new Set(), creator: new Set(),
     printed: new Set(), shopify: new Set(), estimated: new Set(),
   },
   // "Categories"/"Materiaux"/"Tags"/"Types 3D" tend to accumulate a lot of
@@ -39,6 +39,7 @@ const state = {
 const FILTER_FIELDS = {
   category: { label: "Categories", icon: "📁", multivalued: false, rename: true,  getValues: (p) => (p.category ? [p.category] : []) },
   tag:      { label: "Tags",       icon: "🏷️", multivalued: true,  rename: false, getValues: (p) => p.tags || [] },
+  character: { label: "Personnages", icon: "🎭", multivalued: true, rename: false, getValues: (p) => p.characters || [] },
   material: { label: "Materiaux",  icon: "🧵", multivalued: true,  rename: true,  getValues: (p) => p.suggestedMaterials || [] },
   creator:  { label: "Createurs",  icon: "👤", multivalued: false, rename: true,  getValues: (p) => (p.creator ? [p.creator] : []) },
   // Impression / Shopify have their own bespoke sidebar blocks (icons + French
@@ -425,6 +426,7 @@ function projectMatchesSearch(p, query) {
   const q = query.toLowerCase();
   return p.name.toLowerCase().includes(q)
     || (p.tags || []).some((t) => t.toLowerCase().includes(q))
+    || (p.characters || []).some((c) => c.toLowerCase().includes(q))
     || (p.category || "").toLowerCase().includes(q)
     || (p.creator || "").toLowerCase().includes(q);
 }
@@ -1443,6 +1445,7 @@ function renderProjectDetail(project) {
       </div>
       ${chipEditorHtml("materialsChipList", "Matériaux", "🧵", project.suggestedMaterials || [], "chip-material")}
       ${chipEditorHtml("tagsChipList", "Tags", "🏷️", project.tags || [], "chip-tag")}
+      ${chipEditorHtml("charactersChipList", "Personnages", "🎭", project.characters || [], "chip-character")}
       <label class="already-printed-check">
         <input type="checkbox" id="detailAlreadyPrintedCheck" ${project.alreadyPrinted ? "checked" : ""} />
         ✅ Déjà imprimé
@@ -1492,6 +1495,22 @@ function wireProjectDetailEvents(project) {
       const normalized = normalizeForFuzzyMatch(value);
       const allTags = new Set(state.projects.flatMap((p) => p.tags || []));
       for (const existing of allTags) {
+        if (existing !== value && normalizeForFuzzyMatch(existing) === normalized) return existing;
+      }
+      return null;
+    });
+  wireChipEditor("charactersChipList", project.characters || [],
+    (list) => updateChipField(project, "characters", list),
+    (query) => {
+      const q = query.trim().toLowerCase();
+      if (!q) return [];
+      const all = new Set(state.projects.flatMap((p) => p.characters || []));
+      return [...all].filter((v) => v.toLowerCase().includes(q) && !(project.characters || []).includes(v)).slice(0, 8);
+    },
+    (value) => {
+      const normalized = normalizeForFuzzyMatch(value);
+      const allCharacters = new Set(state.projects.flatMap((p) => p.characters || []));
+      for (const existing of allCharacters) {
         if (existing !== value && normalizeForFuzzyMatch(existing) === normalized) return existing;
       }
       return null;

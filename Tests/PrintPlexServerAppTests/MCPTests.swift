@@ -366,6 +366,34 @@ final class MCPTests: XCTestCase {
         XCTAssertNil(reloaded?.shopifyProductId)
     }
 
+    /// Acceptance criterion from the "Personnages" plan: a project keeps its
+    /// characters after a rescan — i.e. they really round-trip through
+    /// info.json, not just the DB row.
+    func testCharactersSurviveARescan() async throws {
+        let stlPath = mediaDir.appendingPathComponent("Groupe/Figurine/piece.stl")
+        try FileManager.default.createDirectory(at: stlPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: stlPath)
+        try await app.test(.POST, "api/libraries", beforeRequest: { req in
+            try req.content.encode(LibraryCreateRequest(name: "Bibliothèque", relativePath: ""))
+        }, afterResponse: { res async in
+            XCTAssertEqual(res.status, .ok)
+        })
+        await app.scanService.runScan()
+
+        let project = try await ProjectModel.query(on: app.db).first()
+        let projectId = try XCTUnwrap(project?.requireID()).uuidString
+
+        let res = try await callTool("update_project", arguments: ["projectId": projectId, "characters": ["Luigi", "Bane"]])
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+
+        let getRes = try await callTool("get_project", arguments: ["projectId": projectId])
+        XCTAssertTrue(getRes.body.string.contains("\"characters\":[\"Luigi\",\"Bane\"]"))
+
+        await app.scanService.runScan()
+        let reloaded = try await ProjectModel.find(UUID(uuidString: projectId), on: app.db)
+        XCTAssertEqual(reloaded?.characters, ["Luigi", "Bane"])
+    }
+
     func testListProjectsToolAppliesFiltersAndPagination() async throws {
         for i in 0..<3 {
             let folder = mediaDir.appendingPathComponent("Projet \(i)")

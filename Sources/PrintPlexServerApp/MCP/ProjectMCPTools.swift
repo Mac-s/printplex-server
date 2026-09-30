@@ -6,12 +6,13 @@ enum ProjectMCPTools {
     static let tools: [Tool] = [
         Tool(
             name: "list_projects",
-            description: "Liste les projets de la bibliothèque (vue compacte : id, nom, catégorie, créateur, tags, nombre de fichiers), triés par date de modification décroissante, avec filtres et pagination. Sans argument, renvoie au plus 50 projets. Utiliser get_project pour le détail complet d'un projet.",
+            description: "Liste les projets de la bibliothèque (vue compacte : id, nom, catégorie, créateur, tags, personnages, nombre de fichiers), triés par date de modification décroissante, avec filtres et pagination. Sans argument, renvoie au plus 50 projets. Utiliser get_project pour le détail complet d'un projet.",
             inputSchema: objectSchema(
                 properties: [
                     "category": stringProp("Filtrer par catégorie exacte"),
                     "creator": stringProp("Filtrer par créateur exact"),
                     "tag": stringProp("Filtrer par tag exact"),
+                    "character": stringProp("Filtrer par personnage exact"),
                     "search": stringProp("Recherche texte (nom, catégorie, créateur, tags)"),
                     "limit": intProp("Nombre de résultats (défaut 50, max 200)"),
                     "offset": intProp("Décalage pour la pagination (défaut 0)"),
@@ -37,6 +38,7 @@ enum ProjectMCPTools {
                     "category": stringProp("Nouvelle catégorie (chaîne vide pour effacer)"),
                     "creator": stringProp("Nouveau créateur (chaîne vide pour effacer)"),
                     "tags": arrayProp("Liste complète des tags (remplace l'existante)"),
+                    "characters": arrayProp("Liste complète des personnages (remplace l'existante)"),
                     "suggestedMaterials": arrayProp("Liste complète des matériaux suggérés"),
                     "multiColor": boolProp("Multi-couleur"),
                     "notes": stringProp("Notes libres"),
