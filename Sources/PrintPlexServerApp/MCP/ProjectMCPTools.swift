@@ -6,8 +6,17 @@ enum ProjectMCPTools {
     static let tools: [Tool] = [
         Tool(
             name: "list_projects",
-            description: "Liste tous les projets de la bibliothèque, triés par date de modification décroissante.",
-            inputSchema: objectSchema()
+            description: "Liste les projets de la bibliothèque (vue compacte : id, nom, catégorie, créateur, tags, nombre de fichiers), triés par date de modification décroissante, avec filtres et pagination. Sans argument, renvoie au plus 50 projets. Utiliser get_project pour le détail complet d'un projet.",
+            inputSchema: objectSchema(
+                properties: [
+                    "category": stringProp("Filtrer par catégorie exacte"),
+                    "creator": stringProp("Filtrer par créateur exact"),
+                    "tag": stringProp("Filtrer par tag exact"),
+                    "search": stringProp("Recherche texte (nom, catégorie, créateur, tags)"),
+                    "limit": intProp("Nombre de résultats (défaut 50, max 200)"),
+                    "offset": intProp("Décalage pour la pagination (défaut 0)"),
+                ]
+            )
         ),
         Tool(
             name: "get_project",
@@ -33,6 +42,7 @@ enum ProjectMCPTools {
                     "notes": stringProp("Notes libres"),
                     "alreadyPrinted": boolProp("Déjà imprimé"),
                     "sourceUrl": stringProp("URL source (chaîne vide pour effacer)"),
+                    "shopifyProductId": stringProp("ID du produit Shopify lié (chaîne vide pour délier)"),
                 ],
                 required: ["projectId"]
             )
@@ -63,7 +73,8 @@ enum ProjectMCPTools {
     static func call(_ name: String, _ arguments: [String: Value]?, app: Application) async throws -> CallTool.Result? {
         switch name {
         case "list_projects":
-            return try await toolResult(ProjectController.fetchIndex(on: app.db))
+            let query = try decodeArguments(ProjectListQuery.self, from: arguments)
+            return try await toolResult(ProjectController.fetchIndexPage(query: query, on: app.db))
 
         case "get_project":
             return try await toolResult(ProjectController.fetchDetail(id: projectID(from: arguments), on: app.db))

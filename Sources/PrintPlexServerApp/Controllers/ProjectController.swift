@@ -28,6 +28,39 @@ struct ShopifyMatchResponse: Content {
     var url: String?
 }
 
+/// Filters + pagination for the MCP `list_projects` tool only — the web
+/// dashboard's own `/api/projects` route still returns the full list
+/// unfiltered (its sidebar facet counts need every project in hand), so this
+/// stays separate from `fetchIndex` rather than changing its signature.
+struct ProjectListQuery: Content {
+    var category: String?
+    var creator: String?
+    var tag: String?
+    var search: String?
+    var limit: Int?
+    var offset: Int?
+}
+
+/// Trimmed projection for `list_projects` — the full `ProjectDTO` (every
+/// source_*/Shopify/estimate field) is ~300KB across the whole library, too
+/// much for an agent to read in one call. `get_project` remains the way to
+/// fetch everything about a single project.
+struct ProjectListItem: Content {
+    var id: UUID
+    var name: String
+    var category: String?
+    var creator: String?
+    var tags: [String]
+    var totalFileCount: Int
+}
+
+struct ProjectListPage: Content {
+    var items: [ProjectListItem]
+    var total: Int
+    var limit: Int
+    var offset: Int
+}
+
 struct ProjectController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let projects = routes.grouped("api", "projects")
@@ -65,6 +98,39 @@ struct ProjectController: RouteCollection {
                               totalFileCount: totalFileCount, imageCount: imageCount,
                               hasManualEstimate: model.hasManualEstimate(from: files))
         }
+    }
+
+    static func fetchIndexPage(query: ProjectListQuery, on db: Database) async throws -> ProjectListPage {
+        var items = try await fetchIndex(on: db)
+
+        if let category = query.category, !category.isEmpty {
+            items = items.filter { $0.category == category }
+        }
+        if let creator = query.creator, !creator.isEmpty {
+            items = items.filter { $0.creator == creator }
+        }
+        if let tag = query.tag, !tag.isEmpty {
+            items = items.filter { $0.tags.contains(tag) }
+        }
+        if let search = query.search, !search.isEmpty {
+            let needle = search.lowercased()
+            items = items.filter { project in
+                project.name.lowercased().contains(needle)
+                    || (project.category ?? "").lowercased().contains(needle)
+                    || (project.creator ?? "").lowercased().contains(needle)
+                    || project.tags.contains { $0.lowercased().contains(needle) }
+            }
+        }
+
+        let total = items.count
+        let limit = min(max(query.limit ?? 50, 1), 200)
+        let offset = max(query.offset ?? 0, 0)
+        let page = items.dropFirst(offset).prefix(limit).map { project in
+            ProjectListItem(id: project.id, name: project.name, category: project.category,
+                             creator: project.creator, tags: project.tags,
+                             totalFileCount: project.totalFileCount)
+        }
+        return ProjectListPage(items: Array(page), total: total, limit: limit, offset: offset)
     }
 
     @Sendable
@@ -116,7 +182,7 @@ struct ProjectController: RouteCollection {
         // DB-only (see ProjectDTO) — no info.json mirror below, unlike the other source_* fields.
         if let v = body.sourceScrapeStatus { model.sourceScrapeStatus = v.isEmpty ? nil : v }
         if let v = body.sourceScrapeError { model.sourceScrapeError = v.isEmpty ? nil : v }
-        if let v = body.shopifyProductId { model.shopifyProductId = v }
+        if let v = body.shopifyProductId { model.shopifyProductId = v.isEmpty ? nil : v }
         if let v = body.coverImageFileName { model.coverImageFileName = v }
         try await model.save(on: db)
 
@@ -135,7 +201,7 @@ struct ProjectController: RouteCollection {
             if let v = body.sourceEstimatedWeight { info.source_estimated_weight = v.isEmpty ? nil : v }
             if let v = body.sourceEstimatedPrintTime { info.source_estimated_print_time = v.isEmpty ? nil : v }
             if let v = body.sourceInstructionImages { info.source_instruction_images = v }
-            if let v = body.shopifyProductId { info.shopify_product_id = v }
+            if let v = body.shopifyProductId { info.shopify_product_id = v.isEmpty ? nil : v }
             if let v = body.coverImageFileName { info.image_principale = v }
         }
 

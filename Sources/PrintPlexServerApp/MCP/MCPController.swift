@@ -5,6 +5,17 @@ struct MCPController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let mcp = routes.grouped("api", "mcp")
         mcp.on(.POST, body: .collect(maxSize: "10mb"), use: handle)
+        // The Streamable HTTP spec expects 405 on GET/DELETE when the server
+        // doesn't open an SSE stream / support session termination — without
+        // this they fall through to Vapor's default 404, which reads to some
+        // clients as "this endpoint doesn't exist at all".
+        mcp.on(.GET, use: methodNotAllowed)
+        mcp.on(.DELETE, use: methodNotAllowed)
+    }
+
+    @Sendable
+    func methodNotAllowed(req: Vapor.Request) async throws -> Vapor.Response {
+        throw Abort(.methodNotAllowed)
     }
 
     @Sendable

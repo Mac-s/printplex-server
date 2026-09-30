@@ -142,11 +142,10 @@ final class MCPTests: XCTestCase {
         let res = try await callTool("list_projects")
         XCTAssertEqual(res.status, .ok)
         XCTAssertFalse(res.body.string.contains("\"isError\":true"))
-        // Array-returning tools get their payload wrapped under "items" in
-        // structuredContent (MCP requires it to be an object) — the
-        // unwrapped payload also lives in the text block.
-        XCTAssertTrue(res.body.string.contains("\"text\":\"[]\""))
-        XCTAssertTrue(res.body.string.contains("\"structuredContent\":{\"items\":[]}"))
+        // Unlike the other list_* tools, list_projects already returns an
+        // object (items/total/limit/offset), so it needs no "items" wrapping.
+        XCTAssertTrue(res.body.string.contains("\"items\":[]"))
+        XCTAssertTrue(res.body.string.contains("\"total\":0"))
     }
 
     func testGetProjectToolReturns404ForUnknownId() async throws {
@@ -324,5 +323,75 @@ final class MCPTests: XCTestCase {
 
         let reloaded = try await ProjectModel.find(UUID(uuidString: projectId), on: app.db)
         XCTAssertEqual(reloaded?.notes, "Testé via MCP")
+    }
+
+    /// Streamable HTTP expects 405 (not the router's default 404) when the
+    /// server doesn't support a GET/DELETE session — see MCPController.
+    func testMcpEndpointRejectsGetAndDelete() async throws {
+        try await app.test(.GET, "api/mcp", afterResponse: { res async in
+            XCTAssertEqual(res.status, .methodNotAllowed)
+        })
+        try await app.test(.DELETE, "api/mcp", afterResponse: { res async in
+            XCTAssertEqual(res.status, .methodNotAllowed)
+        })
+    }
+
+    func testUpdateProjectToolPersistsAndExposesShopifyProductId() async throws {
+        // folderPath must be a real, existing absolute directory:
+        // LibraryScanner.updateProjectInfo writes info.json straight into it.
+        let folder = mediaDir.appendingPathComponent("Projet Test")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let model = ProjectModel()
+        model.name = "Projet Test"
+        model.folderPath = folder.path
+        model.lastModifiedAt = Date()
+        model.dateAdded = Date()
+        model.tags = []
+        model.suggestedMaterials = []
+        try await model.save(on: app.db)
+        let projectId = try model.requireID().uuidString
+
+        let res = try await callTool("update_project", arguments: ["projectId": projectId, "shopifyProductId": "123456"])
+        XCTAssertEqual(res.status, .ok)
+        XCTAssertFalse(res.body.string.contains("\"isError\":true"))
+
+        let getRes = try await callTool("get_project", arguments: ["projectId": projectId])
+        XCTAssertTrue(getRes.body.string.contains("\"shopifyProductId\":\"123456\""))
+
+        // Empty string unlinks, same convention as category/creator/sourceUrl.
+        let clearRes = try await callTool("update_project", arguments: ["projectId": projectId, "shopifyProductId": ""])
+        XCTAssertFalse(clearRes.body.string.contains("\"isError\":true"))
+        let reloaded = try await ProjectModel.find(UUID(uuidString: projectId), on: app.db)
+        XCTAssertNil(reloaded?.shopifyProductId)
+    }
+
+    func testListProjectsToolAppliesFiltersAndPagination() async throws {
+        for i in 0..<3 {
+            let folder = mediaDir.appendingPathComponent("Projet \(i)")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+            let model = ProjectModel()
+            model.name = "Projet \(i)"
+            model.folderPath = folder.path
+            model.lastModifiedAt = Date()
+            model.dateAdded = Date()
+            model.category = i == 0 ? "Cosplay" : "Décoration"
+            model.tags = []
+            model.suggestedMaterials = []
+            try await model.save(on: app.db)
+        }
+
+        let all = try await callTool("list_projects")
+        XCTAssertTrue(all.body.string.contains("\"total\":3"))
+        XCTAssertTrue(all.body.string.contains("\"limit\":50"))
+
+        let limited = try await callTool("list_projects", arguments: ["limit": 1])
+        XCTAssertTrue(limited.body.string.contains("\"total\":3"))
+        XCTAssertTrue(limited.body.string.contains("\"limit\":1"))
+
+        let filtered = try await callTool("list_projects", arguments: ["category": "Cosplay"])
+        XCTAssertTrue(filtered.body.string.contains("\"total\":1"))
+        XCTAssertTrue(filtered.body.string.contains("Projet 0"))
     }
 }
