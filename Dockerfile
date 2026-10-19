@@ -31,9 +31,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && curl -fsSL -o /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/${GOSU_VERSION}/gosu-${TARGETARCH}" \
     && chmod +x /usr/local/bin/gosu \
     && gosu --version \
-    && apt-get purge -y --auto-remove curl software-properties-common \
+    && apt-get purge -y --auto-remove software-properties-common \
     && rm -rf /var/lib/apt/lists/*
 
+# curl is deliberately kept (not purged above): docker-compose's healthcheck
+# runs `curl /health` inside this container, so without it the container
+# reports "unhealthy" forever even though the server is fine.
 RUN useradd --create-home printplex
 WORKDIR /app
 COPY --from=build /build/.build/release/PrintPlexServerApp /app/
