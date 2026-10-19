@@ -4,16 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PrintPlex Server</title>
+<meta name="theme-color" content="#18191a">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.json">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
 <header class="topbar">
   <button class="btn" id="btnMobileMenu" aria-label="Menu">☰</button>
-  <div class="brand">
-    <span class="brand-icon">🧊</span>
+  <a class="brand" href="#/" title="Bibliothèque">
+    <img class="brand-icon" src="/icon-128.png" alt="" width="26" height="26">
     <span class="brand-name">PrintPlex</span>
     <span class="brand-tag">Server</span>
-  </div>
+  </a>
   <input class="search" id="searchInput" placeholder="Rechercher…" />
   <div class="stats" id="stats">
     <div class="stat"><span class="stat-value" id="statProjects">–</span><span class="stat-label">projets</span></div>

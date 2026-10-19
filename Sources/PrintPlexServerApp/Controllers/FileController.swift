@@ -98,10 +98,11 @@ struct FileController: RouteCollection {
     func update(req: Request) async throws -> FileDTO {
         let file = try await find(req)
         let body = try req.content.decode(FileUpdateRequest.self)
-        return try await Self.applyUpdate(body, to: file, on: req.db)
+        return try await Self.applyUpdate(body, to: file, app: req.application)
     }
 
-    static func applyUpdate(_ body: FileUpdateRequest, to file: FileModel, on db: Database) async throws -> FileDTO {
+    static func applyUpdate(_ body: FileUpdateRequest, to file: FileModel, app: Application) async throws -> FileDTO {
+        let db = app.db
         if body.manualWorkLevel != nil || body.actualPrintTimeSec != nil || body.actualFilamentGrams != nil {
             var params = file.printParams ?? PrintParamsDTO()
             if let level = body.manualWorkLevel { params.manualWorkLevel = level }
@@ -110,6 +111,7 @@ struct FileController: RouteCollection {
             file.printParams = params
         }
         try await file.save(on: db)
+        await app.scanService.notifyLibraryChanged(projectID: file.$project.id)
         return file.toDTO()
     }
 

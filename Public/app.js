@@ -191,7 +191,9 @@ function formatDuration(totalSeconds) {
 }
 function formatEur(n) { return `${n.toFixed(2)} €`; }
 
+let lastLocalWrite = 0;
 async function api(path, options = {}) {
+  if (options.method && options.method !== "GET") lastLocalWrite = Date.now();
   const res = await fetch(path, {
     headers: options.body ? { "Content-Type": "application/json" } : {},
     ...options,
@@ -277,6 +279,7 @@ function connectScanEvents() {
         break;
       case "projectDiscovered":
         logLine(`Projet : ${data.projectName}`);
+        scheduleScanRefresh(); // new projects show up while the scan runs, not only at the end
         break;
       case "projectComplete":
         logLine(`✓ Projet terminé — ${data.filesFound} fichiers au total`);
@@ -287,7 +290,10 @@ function connectScanEvents() {
       case "scanCompleted":
         logLine(`Scan terminé — ${data.projectsFound} projets, ${data.filesFound} fichiers`, "done");
         refreshStatus();
-        onLibraryChanged();
+        scheduleSoftRefresh();
+        break;
+      case "libraryChanged":
+        scheduleSoftRefresh(data.projectId);
         break;
       case "error":
         logLine(`Erreur : ${data.message}`, "error");
@@ -295,9 +301,69 @@ function connectScanEvents() {
         break;
     }
   };
-  source.onerror = () => {
-    // EventSource auto-reconnects; just note it once.
+  // EventSource auto-reconnects by itself; the only thing to do on our side
+  // is catch up on whatever was missed while the connection was down.
+  let dropped = false;
+  source.onerror = () => { dropped = true; };
+  source.onopen = () => {
+    if (dropped) { dropped = false; scheduleSoftRefresh(); }
   };
+}
+
+// ── Live refresh ──
+// Server events (SSE, see connectScanEvents) say "something changed"; the
+// browser then re-reads the data and redraws what's on screen *without*
+// resetting the user's place — unlike onLibraryChanged(), which is the
+// heavier "re-render everything" used after explicit settings changes.
+
+let softRefreshTimer = null;
+let softRefreshRunning = false;
+let softRefreshAgain = false;
+let scanRefreshTimer = null;
+
+function scheduleSoftRefresh(changedProjectId) {
+  state.liveChangedProjectId = changedProjectId ?? null;
+  clearTimeout(softRefreshTimer);
+  softRefreshTimer = setTimeout(softRefresh, 400);
+}
+
+// During a scan, throttle to one refresh every few seconds rather than one
+// per discovered project.
+function scheduleScanRefresh() {
+  if (scanRefreshTimer) return;
+  scanRefreshTimer = setTimeout(() => { scanRefreshTimer = null; scheduleSoftRefresh(); }, 4000);
+}
+
+function isUserEditing() {
+  const el = document.activeElement;
+  return !!el && document.getElementById("detail")?.contains(el)
+    && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+}
+
+async function softRefresh() {
+  if (softRefreshRunning) { softRefreshAgain = true; return; }
+  softRefreshRunning = true;
+  try {
+    const changedId = state.liveChangedProjectId;
+    await loadLibrary();
+    state.fileListCache = {};
+    renderSidebar();
+    if (state.view === "grid") {
+      const y = window.scrollY;
+      renderGrid();
+      window.scrollTo(0, y);
+    } else if (state.view === "project" && state.selectedId
+               && (!changedId || changedId.toLowerCase() === state.selectedId.toLowerCase())
+               && !isUserEditing() && Date.now() - lastLocalWrite > 2500) {
+      await openProject(state.selectedId, { quiet: true });
+    }
+    // Settings forms are left alone on purpose: redrawing would wipe half-typed input.
+  } catch (e) {
+    console.error("Rafraîchissement automatique échoué", e);
+  } finally {
+    softRefreshRunning = false;
+    if (softRefreshAgain) { softRefreshAgain = false; scheduleSoftRefresh(); }
+  }
 }
 
 /// Reloads everything derived from the library and re-renders whatever is
@@ -535,7 +601,7 @@ function activeFilterTitle() {
 function setSingleFilter(type, value) {
   state.filter = { type, value };
   clearAllMultiSelects();
-  showGrid({ keepFilter: true });
+  goGrid();
 }
 
 // Toggles one value within one field's selection, without touching any
@@ -546,7 +612,7 @@ function toggleMultiFilter(key, value) {
   if (set.has(value)) set.delete(value);
   else set.add(value);
   state.filter = anySelectionActive() ? { type: "filtered" } : { type: "all" };
-  showGrid({ keepFilter: true });
+  goGrid();
 }
 
 // `key` may be comma-separated (e.g. "printed,estimated") to clear several
@@ -554,13 +620,13 @@ function toggleMultiFilter(key, value) {
 function clearMultiFilter(key) {
   for (const k of key.split(",")) state.selected[k].clear();
   state.filter = anySelectionActive() ? { type: "filtered" } : { type: "all" };
-  showGrid({ keepFilter: true });
+  goGrid();
 }
 
 function clearAllFilters() {
   clearAllMultiSelects();
   state.filter = { type: "all" };
-  showGrid({ keepFilter: true });
+  goGrid();
 }
 
 // ───────────────────────── Sidebar ─────────────────────────
@@ -714,7 +780,7 @@ function wireSidebarEvents() {
       case "todo": setSingleFilter("todo"); break;
       case "kind": setSingleFilter("kind", btn.dataset.value); break;
       case "shopifyOrphans": setSingleFilter("shopifyOrphans"); break;
-      case "shopifyTasks": openShopifyTasksView(); break;
+      case "shopifyTasks": state.filter = { type: "shopifyTasks" }; clearAllMultiSelects(); goGrid(); break;
       case "multi": toggleMultiFilter(btn.dataset.key, btn.dataset.value); break;
       case "clear": clearMultiFilter(btn.dataset.key); break;
       case "clearAll": clearAllFilters(); break;
@@ -813,11 +879,50 @@ function showGrid(opts = {}) {
   renderGrid();
 }
 
-function backLinkHtml() {
-  return `<button class="back-link" id="btnBackToGrid">← Retour à la bibliothèque</button>`;
+// ───────────────────────── Routing ─────────────────────────
+// Hash-based (#/, #/project/<id>, #/settings/<tab>) so the browser's own
+// back/forward buttons and deep links work with no server-side catch-all
+// route. User-initiated navigation goes through go*() — which only changes
+// the hash — and every route change, including back/forward, funnels
+// through applyRoute() → the render functions (showGrid/openProject/...).
+
+const scrollByHash = {};
+
+function isGridHash() {
+  return !location.hash || location.hash === "#" || location.hash === "#/";
 }
-function wireBackLink() {
-  document.getElementById("btnBackToGrid")?.addEventListener("click", () => showGrid({ keepFilter: true }));
+
+function goProject(id) { location.hash = `#/project/${id}`; }
+function goSettings(tab) { location.hash = tab ? `#/settings/${tab}` : "#/settings"; }
+function goGrid() {
+  if (isGridHash()) renderGridRoute();
+  else location.hash = "#/";
+}
+
+function renderGridRoute() {
+  if (state.filter.type === "shopifyTasks") openShopifyTasksView();
+  else showGrid({ keepFilter: true });
+}
+
+let lastRenderedHash = null;
+async function applyRoute() {
+  if (lastRenderedHash !== null) scrollByHash[lastRenderedHash] = window.scrollY;
+  const hash = location.hash || "#/";
+  lastRenderedHash = hash;
+  closeMobileSidebar();
+
+  const project = hash.match(/^#\/project\/([^/]+)/);
+  const settings = hash.match(/^#\/settings(?:\/([^/]+))?/);
+  if (project) {
+    await openProject(decodeURIComponent(project[1]));
+    window.scrollTo(0, 0);
+  } else if (settings) {
+    await openSettings(settings[1] && SETTINGS_TABS.some((t) => t.id === settings[1]) ? settings[1] : undefined);
+    window.scrollTo(0, 0);
+  } else {
+    renderGridRoute();
+    window.scrollTo(0, scrollByHash[hash] ?? 0);
+  }
 }
 
 function renderGrid() {
@@ -1246,7 +1351,7 @@ function wireGridCardClicks(container) {
         toggleAlreadyPrinted(el.dataset.open);
         return;
       }
-      openProject(el.dataset.open);
+      goProject(el.dataset.open);
     });
   });
 }
@@ -1543,15 +1648,15 @@ function getPersistedEstimateMaterialId() {
   return (saved && state.materials.some((m) => m.id === saved)) ? saved : state.materials[0]?.id;
 }
 
-async function openProject(id) {
+async function openProject(id, opts = {}) {
   stopSourceScrapePolling();
   state.selectedId = id;
   state.view = "project";
   setDetailWide(false);
   setSettingsButtonActive(false);
   const detail = document.getElementById("detail");
-  detail.innerHTML = backLinkHtml() + `<div class="placeholder">Chargement…</div>`;
-  wireBackLink();
+  const scrollY = window.scrollY;
+  if (!opts.quiet) detail.innerHTML = `<div class="placeholder">Chargement…</div>`;
   try {
     const project = await api(`/api/projects/${id}`);
     detailState = { manualWorkPerFile: {}, estimateFileId: "all", platePerFile: {} };
@@ -1559,9 +1664,9 @@ async function openProject(id) {
       if (f.printParams?.manualWorkLevel) detailState.manualWorkPerFile[f.id] = f.printParams.manualWorkLevel;
     }
     renderProjectDetail(project);
+    if (opts.quiet) window.scrollTo(0, scrollY);
   } catch (e) {
-    detail.innerHTML = backLinkHtml() + `<div class="message err">Impossible de charger le projet : ${escapeHtml(e.message)}</div>`;
-    wireBackLink();
+    detail.innerHTML = `<div class="message err">Impossible de charger le projet : ${escapeHtml(e.message)}</div>`;
   }
 }
 
@@ -1571,7 +1676,7 @@ function renderProjectDetail(project) {
   const modelParts = files.filter((f) => f.fileRole === "modelPart");
   const totalSize = files.reduce((sum, f) => sum + (f.fileSize || 0), 0);
 
-  detail.innerHTML = backLinkHtml() + `
+  detail.innerHTML = `
     <div class="detail-header">
       <div class="detail-header-top">
         <input class="detail-name-input" id="detailNameInput" value="${escapeHtml(project.name)}" placeholder="Nom du projet" />
@@ -1616,7 +1721,6 @@ function renderProjectDetail(project) {
     ${fileListSectionsHtml(project)}
   `;
 
-  wireBackLink();
   wireProjectDetailEvents(project);
 }
 
@@ -2668,30 +2772,29 @@ async function openSettings(tab) {
   setSettingsButtonActive(true);
 
   const detail = document.getElementById("detail");
-  detail.innerHTML = backLinkHtml() + `<div class="placeholder">Chargement des réglages…</div>`;
-  wireBackLink();
+  detail.innerHTML = `<div class="placeholder">Chargement des réglages…</div>`;
   try {
     const overview = await api("/api/settings");
     renderSettings(overview);
   } catch (e) {
-    detail.innerHTML = backLinkHtml() + `<div class="message err">Impossible de charger les réglages : ${escapeHtml(e.message)}</div>`;
-    wireBackLink();
+    detail.innerHTML = `<div class="message err">Impossible de charger les réglages : ${escapeHtml(e.message)}</div>`;
   }
 }
 
 function renderSettings(overview) {
   const detail = document.getElementById("detail");
-  detail.innerHTML = backLinkHtml() + `
+  detail.innerHTML = `
     <h1 class="project-title">Réglages</h1>
     <div class="settings-tabs">
       ${SETTINGS_TABS.map((t) => `<button class="settings-tab ${t.id === state.settingsTab ? "active" : ""}" data-tab="${t.id}">${t.label}</button>`).join("")}
     </div>
     <div id="settingsBody"></div>
   `;
-  wireBackLink();
   for (const tabBtn of detail.querySelectorAll(".settings-tab")) {
     tabBtn.addEventListener("click", () => {
       state.settingsTab = tabBtn.dataset.tab;
+      history.replaceState(null, "", `#/settings/${state.settingsTab}`);
+      lastRenderedHash = location.hash;
       renderSettings(overview);
     });
   }
@@ -3465,7 +3568,7 @@ function openDuplicateProductModal(opts = {}) {
         catch (e) { alert(`Produit créé, mais échec de l'association : ${e.message}`); }
       }
       await onLibraryChanged();
-      if (!opts.onCreated) openSettings("shopify");
+      if (!opts.onCreated) goSettings("shopify");
     } catch (e) {
       msgBox.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`;
     }
@@ -3640,7 +3743,7 @@ function handleSessionExpired() {
 
 async function boot() {
   document.getElementById("btnScan").addEventListener("click", triggerScan);
-  document.getElementById("btnSettings").addEventListener("click", () => { closeMobileSidebar(); openSettings(); });
+  document.getElementById("btnSettings").addEventListener("click", () => { closeMobileSidebar(); goSettings(); });
   document.getElementById("btnMobileMenu").addEventListener("click", toggleMobileSidebar);
   document.getElementById("sidebarBackdrop").addEventListener("click", closeMobileSidebar);
   document.getElementById("searchInput").addEventListener("input", (evt) => {
@@ -3653,8 +3756,15 @@ async function boot() {
   await Promise.all([loadLibrary(), loadReferenceData()]);
   await refreshStatus();
   renderSidebar();
-  renderGrid();
-  setInterval(refreshStatus, 10000);
+  window.addEventListener("hashchange", applyRoute);
+  await applyRoute();
+  setInterval(async () => {
+    const status = await refreshStatus();
+    if (status && !status.isScanning && status.projectCount !== state.projects.length) scheduleSoftRefresh();
+  }, 10000);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") scheduleSoftRefresh();
+  });
 }
 
 async function bootWithAuth() {

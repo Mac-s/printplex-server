@@ -85,7 +85,7 @@ enum ProjectMCPTools {
             let id = try projectID(from: arguments)
             let body = try decodeArguments(ProjectUpdateRequest.self, from: arguments)
             let model = try await ProjectController.find(id: id, on: app.db)
-            return try await toolResult(ProjectController.applyUpdate(body, to: model, on: app.db))
+            return try await toolResult(ProjectController.applyUpdate(body, to: model, app: app))
 
         case "get_project_estimate":
             let id = try projectID(from: arguments)

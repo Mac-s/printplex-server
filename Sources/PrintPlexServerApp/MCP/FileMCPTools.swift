@@ -62,7 +62,7 @@ enum FileMCPTools {
             let id = try fileID(from: arguments)
             let body = try decodeArguments(FileUpdateRequest.self, from: arguments)
             let file = try await FileController.find(id: id, on: app.db)
-            return try await toolResult(FileController.applyUpdate(body, to: file, on: app.db))
+            return try await toolResult(FileController.applyUpdate(body, to: file, app: app))
 
         case "get_file_estimate":
             let id = try fileID(from: arguments)

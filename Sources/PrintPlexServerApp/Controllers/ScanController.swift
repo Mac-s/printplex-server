@@ -55,6 +55,9 @@ struct ScanController: RouteCollection {
         response.headers.replaceOrAdd(name: .contentType, value: "text/event-stream")
         response.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
         response.headers.replaceOrAdd(name: .connection, value: "keep-alive")
+        // nginx-style reverse proxies (Synology's included) buffer streamed
+        // responses by default, which holds events back until the buffer fills.
+        response.headers.replaceOrAdd(name: "X-Accel-Buffering", value: "no")
         // Vapor's asyncStream body REQUIRES the closure to call .end or .error
         // before returning, in every case — including when the client
         // disconnects mid-stream (writer.write then throws a broken-pipe

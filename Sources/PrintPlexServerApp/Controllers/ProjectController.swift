@@ -239,10 +239,11 @@ struct ProjectController: RouteCollection {
     func update(req: Request) async throws -> ProjectDTO {
         let model = try await find(req)
         let body = try req.content.decode(ProjectUpdateRequest.self)
-        return try await Self.applyUpdate(body, to: model, on: req.db)
+        return try await Self.applyUpdate(body, to: model, app: req.application)
     }
 
-    static func applyUpdate(_ body: ProjectUpdateRequest, to model: ProjectModel, on db: Database) async throws -> ProjectDTO {
+    static func applyUpdate(_ body: ProjectUpdateRequest, to model: ProjectModel, app: Application) async throws -> ProjectDTO {
+        let db = app.db
         // `String?` can't distinguish "field omitted" from "explicitly cleared"
         // over JSON — both decode to nil. So for category/creator, an empty
         // string is the client's way of asking to clear the field (the "À
@@ -272,6 +273,7 @@ struct ProjectController: RouteCollection {
         if let v = body.shopifyProductId { model.shopifyProductId = v.isEmpty ? nil : v }
         if let v = body.coverImageFileName { model.coverImageFileName = v }
         try await model.save(on: db)
+        await app.scanService.notifyLibraryChanged(projectID: model.id)
 
         try LibraryScanner.updateProjectInfo(in: model.folderPath) { info in
             if let v = body.name { info.nom = v }

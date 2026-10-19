@@ -86,6 +86,7 @@ struct ForgeCoreController: RouteCollection {
             model.sourceScrapeStatus = "failed"
             model.sourceScrapeError = body.error ?? "Échec inconnu"
             try await model.save(on: req.db)
+            await req.application.scanService.notifyLibraryChanged(projectID: model.id)
             return try await projectDTO(for: model, on: req.db)
         }
 

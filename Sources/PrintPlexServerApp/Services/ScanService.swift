@@ -4,7 +4,8 @@ import PrintPlexCore
 
 /// Progress event pushed to SSE subscribers during a scan.
 struct ScanProgressEvent: Codable, Sendable {
-    var type: String            // scanStarted | libraryStarted | projectDiscovered | projectComplete | meshParsed | scanCompleted | error
+    var type: String            // scanStarted | libraryStarted | projectDiscovered | projectComplete | meshParsed | scanCompleted | libraryChanged | ping | error
+    var projectId: String?      // libraryChanged: the project that was edited, when it's a single one
     var projectName: String?
     var libraryName: String?
     var path: String?
@@ -54,6 +55,7 @@ actor ScanService {
     private var lastScanProjects = 0
     private var lastScanFiles = 0
     private var subscribers: [UUID: AsyncStream<ScanProgressEvent>.Continuation] = [:]
+    private var heartbeatTask: Task<Void, Never>?
     private var settings = ScanSettings(autoScanEnabled: true, scanIntervalMinutes: 15)
 
     init(app: Application, config: AppConfig) {
@@ -105,6 +107,7 @@ actor ScanService {
         AsyncStream { continuation in
             let id = UUID()
             subscribers[id] = continuation
+            startHeartbeatIfNeeded()
             continuation.onTermination = { @Sendable _ in
                 Task { await self.removeSubscriber(id) }
             }
@@ -113,6 +116,30 @@ actor ScanService {
 
     private func removeSubscriber(_ id: UUID) {
         subscribers[id] = nil
+        if subscribers.isEmpty {
+            heartbeatTask?.cancel()
+            heartbeatTask = nil
+        }
+    }
+
+    /// A reverse proxy (or the browser) drops an SSE connection that stays
+    /// silent for a minute or so; a no-op event every 20s keeps it open for
+    /// as long as anyone is listening.
+    private func startHeartbeatIfNeeded() {
+        guard heartbeatTask == nil else { return }
+        heartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(20))
+                await self?.broadcast(ScanProgressEvent(type: "ping"))
+            }
+        }
+    }
+
+    /// Tells every open dashboard that library data changed outside the
+    /// scan pipeline (a project edited via the API/MCP, a scrape imported…)
+    /// so it can refresh without a page reload.
+    func notifyLibraryChanged(projectID: UUID? = nil) {
+        broadcast(ScanProgressEvent(type: "libraryChanged", projectId: projectID?.uuidString))
     }
 
     private func broadcast(_ event: ScanProgressEvent) {
