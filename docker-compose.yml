@@ -44,5 +44,22 @@ services:
       timeout: 5s
       retries: 3
 
+  # Sidecar de scraping (ForgeCore + MakerWorld) : fait ce que `relay.js` faisait
+  # sur le Mac. Il interroge le serveur, scrape avec Chromium headless et
+  # renvoie le résultat — aucune connexion aux sites n'est nécessaire.
+  # La clé d'API se copie depuis Réglages → Compte, à mettre dans `.env`
+  # (PRINTPLEX_API_KEY=ppx_...) ; tant qu'elle est absente le sidecar attend.
+  scraper:
+    image: ghcr.io/mac-s/printplex-server-scraper:latest
+    build: ./scraper
+    container_name: printplex-scraper
+    restart: unless-stopped
+    depends_on:
+      printplex:
+        condition: service_healthy
+    environment:
+      PRINTPLEX_URL: http://printplex:8080
+      PRINTPLEX_API_KEY: ${PRINTPLEX_API_KEY:-}
+
 volumes:
   printplex-data:

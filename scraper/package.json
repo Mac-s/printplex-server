@@ -1,0 +1,14 @@
+{
+  "name": "forgecore-scraper",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "description": "PrintPlex scraping relay (ForgeCore + MakerWorld) — runs as a docker-compose sidecar.",
+  "scripts": {
+    "scrape": "node scrape.js",
+    "relay": "node relay.js"
+  },
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

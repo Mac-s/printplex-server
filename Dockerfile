@@ -2,7 +2,7 @@
 FROM swift:6.1-noble AS build
 WORKDIR /build
 
-COPY Package.swift ./
+COPY Package.swift Package.resolved ./
 COPY Sources ./Sources
 COPY Tests ./Tests
 

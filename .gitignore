@@ -6,3 +6,6 @@ xcuserdata/
 data/
 certificat-synology/
 .superpowers/
+# Scraper sidecar local dev artifacts
+scraper/node_modules/
+scraper/output/
