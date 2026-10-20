@@ -69,7 +69,7 @@ jobs:
           REGISTRY: ${{ env.REGISTRY }}
 
       - name: Build and push (${{ matrix.platform }})
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -144,7 +144,7 @@ jobs:
           REGISTRY: ${{ env.REGISTRY }}
 
       - name: Build and push (amd64 + arm64)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./scraper
           platforms: linux/amd64,linux/arm64
