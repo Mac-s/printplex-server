@@ -42,6 +42,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddLocalMediaPathToSettings())
     app.migrations.add(AddAuthToSettings())
     app.migrations.add(AddCharactersToProjects())
+    app.migrations.add(SessionRecord.migration)
     try await app.autoMigrate()
 
     try await seedReferenceDataIfNeeded(app)
@@ -81,10 +82,14 @@ func configure(_ app: Application) async throws {
         app.http.server.configuration.port = port
     }
 
-    // In-memory session store: fine for a single-instance personal server —
-    // the only cost is everyone being logged out on a restart, which is a
-    // reasonable trade for not needing a sessions table.
-    app.sessions.use(.memory)
+    // Sessions live in the database (not memory) so a redeploy/restart doesn't
+    // log everyone out. The cookie is kept for 30 days rather than being
+    // dropped when the browser closes.
+    app.sessions.use(.fluent)
+    app.sessions.configuration.cookieFactory = { sessionID in
+        .init(string: sessionID.string, expires: Date().addingTimeInterval(30 * 24 * 3600),
+              path: "/", isHTTPOnly: true, sameSite: .lax)
+    }
 
     // Registered `.beginning` so it intercepts CORS preflight (OPTIONS)
     // requests before AuthMiddleware runs — third-party clients calling

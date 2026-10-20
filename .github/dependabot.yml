@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # Package.resolved is pinned (and copied into the Docker build), so
+  # dependency bumps only happen when one of these PRs is merged.
+  - package-ecosystem: swift
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: monthly }
+  - package-ecosystem: npm
+    directory: /scraper
+    schedule: { interval: monthly }
+    ignore:
+      # Must stay equal to the tag of the Playwright base image in
+      # scraper/Dockerfile — bumped by hand, both at once.
+      - dependency-name: playwright

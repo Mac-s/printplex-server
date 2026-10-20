@@ -71,13 +71,21 @@ struct AuthController: RouteCollection {
 
     @Sendable
     func login(req: Request) async throws -> AuthAccountResponse {
+        let limiter = req.application.loginRateLimiter
+        let client = req.clientKey
+        if let wait = await limiter.retryAfter(for: client) {
+            let minutes = (wait + 59) / 60
+            throw Abort(.tooManyRequests, reason: "Trop de tentatives — réessaie dans \(minutes) minute\(minutes > 1 ? "s" : "")")
+        }
         let body = try req.content.decode(AuthCredentialsRequest.self)
         let row = try await settingsRow(req)
         guard let username = row.adminUsername, let hash = row.adminPasswordHash,
               username == body.username, try Bcrypt.verify(body.password, created: hash)
         else {
+            await limiter.recordFailure(for: client)
             throw Abort(.unauthorized, reason: "Identifiants invalides")
         }
+        await limiter.reset(for: client)
         req.isAuthenticated = true
         return AuthAccountResponse(username: username)
     }

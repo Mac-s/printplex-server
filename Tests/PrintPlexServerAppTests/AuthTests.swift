@@ -1,4 +1,5 @@
 import XCTVapor
+import Fluent
 import PrintPlexCore
 @testable import PrintPlexServerApp
 
@@ -129,6 +130,48 @@ final class AuthTests: XCTestCase {
         }, afterResponse: { res async in
             XCTAssertEqual(res.status, .unauthorized)
         })
+    }
+
+    // MARK: - Brute-force guard & persisted sessions
+
+    private func attemptLogin(password: String, client: String = "203.0.113.7") async throws -> HTTPStatus {
+        var status: HTTPStatus = .ok
+        try await app.test(.POST, "api/auth/login", beforeRequest: { req in
+            req.headers.replaceOrAdd(name: "X-Forwarded-For", value: client)
+            try req.content.encode(AuthCredentialsRequest(username: "max", password: password))
+        }, afterResponse: { res async in status = res.status })
+        return status
+    }
+
+    func testTooManyFailedLoginsLocksOutThatClientOnly() async throws {
+        try await login(username: "max", password: "supersecret1")
+
+        for _ in 0..<5 {
+            let status = try await attemptLogin(password: "wrong-password")
+            XCTAssertEqual(status, .unauthorized)
+        }
+        // Even the right password is refused while locked out...
+        let locked = try await attemptLogin(password: "supersecret1")
+        XCTAssertEqual(locked, .tooManyRequests)
+        // ...but another client isn't affected.
+        let other = try await attemptLogin(password: "supersecret1", client: "198.51.100.9")
+        XCTAssertEqual(other, .ok)
+    }
+
+    func testSuccessfulLoginResetsTheFailureCount() async throws {
+        try await login(username: "max", password: "supersecret1")
+        for _ in 0..<4 { _ = try await attemptLogin(password: "wrong-password") }
+        let ok = try await attemptLogin(password: "supersecret1")
+        XCTAssertEqual(ok, .ok)
+        for _ in 0..<4 { _ = try await attemptLogin(password: "wrong-password") }
+        let stillAllowed = try await attemptLogin(password: "supersecret1")
+        XCTAssertEqual(stillAllowed, .ok)
+    }
+
+    func testSessionIsStoredInTheDatabase() async throws {
+        try await login(username: "max", password: "supersecret1")
+        let count = try await SessionRecord.query(on: app.db).count()
+        XCTAssertEqual(count, 1)
     }
 
     func testLogoutRevokesAccess() async throws {

@@ -9,12 +9,31 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # Gate: no image gets published if the test suite fails.
+  test:
+    runs-on: ubuntu-latest
+    container: swift:6.1-noble
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: swift-test-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: swift-test-${{ runner.os }}-
+
+      - name: Run tests
+        run: swift test
+
   # Builds each architecture natively on its own runner instead of using a single
   # multi-platform buildx pass under QEMU emulation — emulated Swift compilation
   # (Vapor + its ~900 dependency compile units) took over 3 hours for the arm64
   # leg alone. GitHub's hosted arm64 runners (free on public repos) build it in
   # roughly the same time as amd64.
   build:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -96,6 +115,7 @@ jobs:
   # the official Playwright base image, no compilation), so a single job with
   # QEMU for the arm64 leg is fine here, unlike the Swift build above.
   scraper:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
