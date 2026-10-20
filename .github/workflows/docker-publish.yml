@@ -18,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Cache SwiftPM build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .build
           key: swift-test-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
