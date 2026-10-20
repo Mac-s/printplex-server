@@ -1084,11 +1084,15 @@ function toggleBatch(id) {
   updateBatchBar();
 }
 
+// kind "list": add/remove one value in a multi-valued field; kind "set":
+// give every selected project the same single value (empty clears it).
 const BATCH_ACTIONS = {
-  addTag:          { title: "Ajouter un tag",          field: "addTags",          source: "tags",       fromSelection: false, label: "＋ 🏷️ Tag" },
-  addCharacter:    { title: "Ajouter un personnage",   field: "addCharacters",    source: "characters", fromSelection: false, label: "＋ 🎭 Personnage" },
-  removeTag:       { title: "Retirer un tag",          field: "removeTags",       source: "tags",       fromSelection: true,  label: "− 🏷️ Tag" },
-  removeCharacter: { title: "Retirer un personnage",   field: "removeCharacters", source: "characters", fromSelection: true,  label: "− 🎭 Personnage" },
+  addTag:          { kind: "list", title: "Ajouter un tag",         field: "addTags",          values: (p) => p.tags || [],          fromSelection: false, placeholder: "Tag…",         label: "＋ 🏷️ Tag" },
+  addCharacter:    { kind: "list", title: "Ajouter un personnage",  field: "addCharacters",    values: (p) => p.characters || [],    fromSelection: false, placeholder: "Personnage…",  label: "＋ 🎭 Personnage" },
+  removeTag:       { kind: "list", title: "Retirer un tag",         field: "removeTags",       values: (p) => p.tags || [],          fromSelection: true,  placeholder: "Tag…",         label: "− 🏷️ Tag" },
+  removeCharacter: { kind: "list", title: "Retirer un personnage",  field: "removeCharacters", values: (p) => p.characters || [],    fromSelection: true,  placeholder: "Personnage…",  label: "− 🎭 Personnage" },
+  setCategory:     { kind: "set",  title: "Définir la catégorie",   field: "category",         values: (p) => (p.category ? [p.category] : []), fromSelection: false, placeholder: "Catégorie…", label: "📁 Catégorie" },
+  setCreator:      { kind: "set",  title: "Définir le créateur",    field: "creator",          values: (p) => (p.creator ? [p.creator] : []),   fromSelection: false, placeholder: "Créateur…",  label: "👤 Créateur" },
 };
 
 function updateBatchBar() {
@@ -1121,7 +1125,7 @@ function openBatchModal(actionKey) {
   const action = BATCH_ACTIONS[actionKey];
   const selected = state.projects.filter((p) => state.batch.has(p.id));
   const pool = action.fromSelection ? selected : state.projects;
-  const suggestions = [...new Set(pool.flatMap((p) => p[action.source] || []))].sort((a, b) => a.localeCompare(b, "fr"));
+  const suggestions = [...new Set(pool.flatMap(action.values))].sort((a, b) => a.localeCompare(b, "fr"));
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay";
@@ -1130,12 +1134,13 @@ function openBatchModal(actionKey) {
       <h2>${action.title}</h2>
       <p class="hint" style="margin:0 0 10px">${selected.length} projet${selected.length > 1 ? "s" : ""} concerné${selected.length > 1 ? "s" : ""}.</p>
       <div class="field">
-        <input id="batchValueInput" list="batchValueList" autocomplete="off" placeholder="${action.source === "tags" ? "Tag…" : "Personnage…"}" />
+        <input id="batchValueInput" list="batchValueList" autocomplete="off" placeholder="${action.placeholder}" />
         <datalist id="batchValueList">${suggestions.map((v) => `<option value="${escapeHtml(v)}"></option>`).join("")}</datalist>
       </div>
       <div id="batchModalMessage"></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-sm" id="btnBatchCancel">Annuler</button>
+        ${action.kind === "set" ? `<button type="button" class="btn btn-sm" id="btnBatchClear">Effacer la valeur</button>` : ""}
         <button type="button" class="btn btn-primary btn-sm" id="btnBatchConfirm">Appliquer</button>
       </div>
     </div>`;
@@ -1144,14 +1149,15 @@ function openBatchModal(actionKey) {
   input.focus();
 
   const close = () => overlay.remove();
-  const confirm = async () => {
-    const value = input.value.trim();
-    if (!value) return;
+  // `clear` (set-kind only): send "" — which the server reads as "remove this value".
+  const confirm = async (clear = false) => {
+    const value = clear ? "" : input.value.trim();
+    if (!value && !clear) return;
     const msg = document.getElementById("batchModalMessage");
     try {
       const res = await api("/api/projects/batch-update", {
         method: "POST",
-        body: JSON.stringify({ ids: [...state.batch], [action.field]: [value] }),
+        body: JSON.stringify({ ids: [...state.batch], [action.field]: action.kind === "set" ? value : [value] }),
       });
       close();
       await loadLibrary();
@@ -1159,13 +1165,14 @@ function openBatchModal(actionKey) {
       renderGrid();
       showToast(res.updated === 0
         ? "Rien à modifier : tous les projets étaient déjà à jour."
-        : `${action.title} « ${value} » — ${res.updated} projet${res.updated > 1 ? "s" : ""} modifié${res.updated > 1 ? "s" : ""}.`, { kind: "ok" });
+        : `${action.title}${clear ? " (valeur effacée)" : ` « ${value} »`} — ${res.updated} projet${res.updated > 1 ? "s" : ""} modifié${res.updated > 1 ? "s" : ""}.`, { kind: "ok" });
     } catch (e) {
       msg.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`;
     }
   };
   document.getElementById("btnBatchCancel").addEventListener("click", close);
-  document.getElementById("btnBatchConfirm").addEventListener("click", confirm);
+  document.getElementById("btnBatchConfirm").addEventListener("click", () => confirm());
+  document.getElementById("btnBatchClear")?.addEventListener("click", () => confirm(true));
   overlay.addEventListener("click", (evt) => { if (evt.target === overlay) close(); });
   input.addEventListener("keydown", (evt) => {
     if (evt.key === "Enter") confirm();

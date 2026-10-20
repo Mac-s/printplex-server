@@ -334,6 +334,28 @@ final class ServerTests: XCTestCase {
             with: Data(contentsOf: mediaDir.appendingPathComponent("Groupe/Cube/info.json"))) as? [String: Any]
         XCTAssertEqual(dict?["tags"] as? [String], ["b", "c"])
 
+        // Category / creator: set on every project, empty string clears
+        try await app.test(.POST, "api/projects/batch-update", beforeRequest: { req in
+            try req.content.encode(ProjectBatchUpdateRequest(ids: [id], category: " Figurines ", creator: "Yosh"))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(try res.content.decode(ProjectBatchUpdateResponse.self).updated, 1)
+        })
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertEqual(project.category, "Figurines")
+            XCTAssertEqual(project.creator, "Yosh")
+        }
+        try await app.test(.POST, "api/projects/batch-update", beforeRequest: { req in
+            try req.content.encode(ProjectBatchUpdateRequest(ids: [id], category: ""))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(try res.content.decode(ProjectBatchUpdateResponse.self).updated, 1)
+        })
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertNil(project.category)
+            XCTAssertEqual(project.creator, "Yosh")  // untouched
+        }
+
         // Nothing to change → counted as 0
         try await app.test(.POST, "api/projects/batch-update", beforeRequest: { req in
             try req.content.encode(ProjectBatchUpdateRequest(ids: [id], addTags: ["b"]))

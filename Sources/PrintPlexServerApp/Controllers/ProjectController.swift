@@ -109,6 +109,9 @@ struct ProjectBatchUpdateRequest: Content {
     var removeTags: [String]?
     var addCharacters: [String]?
     var removeCharacters: [String]?
+    /// Sets the same category/creator on every project; an empty string clears it.
+    var category: String?
+    var creator: String?
 }
 
 struct ProjectBatchUpdateResponse: Content {
@@ -180,7 +183,12 @@ struct ProjectController: RouteCollection {
             if tags != model.tags { update.tags = tags }
             let characters = Self.merged(model.characters ?? [], add: body.addCharacters, remove: body.removeCharacters)
             if characters != (model.characters ?? []) { update.characters = characters }
-            guard update.tags != nil || update.characters != nil else { continue }
+            if let category = body.category?.trimmingCharacters(in: .whitespacesAndNewlines),
+               category != (model.category ?? "") { update.category = category }
+            if let creator = body.creator?.trimmingCharacters(in: .whitespacesAndNewlines),
+               creator != (model.creator ?? "") { update.creator = creator }
+            guard update.tags != nil || update.characters != nil
+                    || update.category != nil || update.creator != nil else { continue }
             _ = try await Self.applyUpdate(update, to: model, app: req.application)
             updated += 1
         }
