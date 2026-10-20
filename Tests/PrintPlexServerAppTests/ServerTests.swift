@@ -303,6 +303,48 @@ final class ServerTests: XCTestCase {
         XCTAssertEqual(dict?["categorie"] as? String, "Tests")  // preserved
     }
 
+    func testBatchUpdateAddsAndRemovesTagsAndCharacters() async throws {
+        try await addLibrary()
+        try await app.test(.POST, "api/scan?wait=true")
+        var projectID: UUID?
+        try await app.test(.GET, "api/projects") { res async throws in
+            projectID = try res.content.decode([ProjectDTO].self).first?.id
+        }
+        let id = try XCTUnwrap(projectID)
+        try await app.test(.PATCH, "api/projects/\(id)", beforeRequest: { req in
+            try req.content.encode(ProjectUpdateRequest(tags: ["a", "b"], characters: ["Zoro"]))
+        }, afterResponse: { res async in XCTAssertEqual(res.status, .ok) })
+
+        try await app.test(.POST, "api/projects/batch-update", beforeRequest: { req in
+            try req.content.encode(ProjectBatchUpdateRequest(
+                ids: [id, UUID()],  // unknown ids are skipped, not an error
+                addTags: ["b", " c "], removeTags: ["a"],
+                addCharacters: ["Luffy"], removeCharacters: nil))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(res.status, .ok)
+            XCTAssertEqual(try res.content.decode(ProjectBatchUpdateResponse.self).updated, 1)
+        })
+        try await app.test(.GET, "api/projects/\(id)") { res async throws in
+            let project = try res.content.decode(ProjectDTO.self)
+            XCTAssertEqual(project.tags, ["b", "c"])           // a removed, b not duplicated, c trimmed+added
+            XCTAssertEqual(project.characters, ["Zoro", "Luffy"])
+        }
+        // Mirrored to info.json like any other edit
+        let dict = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: mediaDir.appendingPathComponent("Groupe/Cube/info.json"))) as? [String: Any]
+        XCTAssertEqual(dict?["tags"] as? [String], ["b", "c"])
+
+        // Nothing to change → counted as 0
+        try await app.test(.POST, "api/projects/batch-update", beforeRequest: { req in
+            try req.content.encode(ProjectBatchUpdateRequest(ids: [id], addTags: ["b"]))
+        }, afterResponse: { res async throws in
+            XCTAssertEqual(try res.content.decode(ProjectBatchUpdateResponse.self).updated, 0)
+        })
+        try await app.test(.POST, "api/projects/batch-update", beforeRequest: { req in
+            try req.content.encode(ProjectBatchUpdateRequest(ids: []))
+        }, afterResponse: { res async in XCTAssertEqual(res.status, .badRequest) })
+    }
+
     /// Same class of bug as `already_printed` before it: the DB write alone
     /// isn't enough — `LibraryScanner.updateProjectInfo`'s merge dictionary
     /// has to know about a field too, or it silently never reaches info.json

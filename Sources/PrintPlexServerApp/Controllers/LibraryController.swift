@@ -71,7 +71,8 @@ struct LibraryController: RouteCollection {
 
         // New library, empty results so far — worth a scan without making the
         // caller wait for it (mirrors the "Scanner maintenant" button).
-        Task.detached(priority: .background) { await app.scanService.runScan() }
+        let service = app.scanService
+        Task.detached(priority: .background) { await service.runScan() }
 
         return model.toDTO()
     }

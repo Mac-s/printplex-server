@@ -56,6 +56,11 @@ actor ScanService {
     private var lastScanFiles = 0
     private var subscribers: [UUID: AsyncStream<ScanProgressEvent>.Continuation] = [:]
     private var heartbeatTask: Task<Void, Never>?
+    /// Set once the app starts shutting down. Fire-and-forget scans (a library
+    /// was just added, "Scanner maintenant"…) can still be waiting to start at
+    /// that point; letting them run would touch an application whose database
+    /// and storage are already torn down.
+    private var isShutDown = false
     private var settings = ScanSettings(autoScanEnabled: true, scanIntervalMinutes: 15)
 
     init(app: Application, config: AppConfig) {
@@ -148,6 +153,15 @@ actor ScanService {
         }
     }
 
+    /// Called when the application shuts down: refuses any further scan and
+    /// waits for one already running to finish.
+    func shutdown() async {
+        isShutDown = true
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+        await scanTask?.value
+    }
+
     // MARK: - Scan pipeline
 
     /// Returns false when this call joined an already-running scan rather
@@ -156,6 +170,7 @@ actor ScanService {
     /// before), by the time this returns.
     @discardableResult
     func runScan() async -> Bool {
+        if isShutDown { return false }
         if let scanTask {
             rescanRequested = true
             await scanTask.value

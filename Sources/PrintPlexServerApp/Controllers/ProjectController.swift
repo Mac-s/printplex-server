@@ -100,6 +100,21 @@ enum RichHTMLSanitizer {
     }
 }
 
+/// Adds/removes tags and characters on several projects at once. Server-side
+/// (rather than the browser PATCHing each project) so the merge happens
+/// against the real current values and the whole batch is a single request.
+struct ProjectBatchUpdateRequest: Content {
+    var ids: [UUID]
+    var addTags: [String]?
+    var removeTags: [String]?
+    var addCharacters: [String]?
+    var removeCharacters: [String]?
+}
+
+struct ProjectBatchUpdateResponse: Content {
+    var updated: Int
+}
+
 struct ShopifyMatchResponse: Content {
     var product: ShopifyProduct
     var url: String?
@@ -144,12 +159,42 @@ struct ProjectController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let projects = routes.grouped("api", "projects")
         projects.get(use: index)
+        projects.post("batch-update", use: batchUpdate)
         projects.group(":projectID") { project in
             project.get(use: detail)
             project.patch(use: update)
             project.get("estimate", use: estimate)
             project.get("shopify", use: shopifyMatch)
         }
+    }
+
+    @Sendable
+    func batchUpdate(req: Request) async throws -> ProjectBatchUpdateResponse {
+        let body = try req.content.decode(ProjectBatchUpdateRequest.self)
+        guard !body.ids.isEmpty else { throw Abort(.badRequest, reason: "Aucun projet sélectionné") }
+        var updated = 0
+        for id in body.ids {
+            guard let model = try await ProjectModel.find(id, on: req.db) else { continue }
+            var update = ProjectUpdateRequest()
+            let tags = Self.merged(model.tags, add: body.addTags, remove: body.removeTags)
+            if tags != model.tags { update.tags = tags }
+            let characters = Self.merged(model.characters ?? [], add: body.addCharacters, remove: body.removeCharacters)
+            if characters != (model.characters ?? []) { update.characters = characters }
+            guard update.tags != nil || update.characters != nil else { continue }
+            _ = try await Self.applyUpdate(update, to: model, app: req.application)
+            updated += 1
+        }
+        return ProjectBatchUpdateResponse(updated: updated)
+    }
+
+    /// Removes first, then appends whatever isn't already there — so adding a
+    /// value a project already has is a no-op and order is otherwise kept.
+    static func merged(_ current: [String], add: [String]?, remove: [String]?) -> [String] {
+        let clean = { (values: [String]?) in (values ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }
+        let removals = Set(clean(remove))
+        var result = current.filter { !removals.contains($0) }
+        for value in clean(add) where !result.contains(value) { result.append(value) }
+        return result
     }
 
     @Sendable

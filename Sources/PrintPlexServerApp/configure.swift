@@ -44,6 +44,7 @@ func configure(_ app: Application) async throws {
     app.migrations.add(AddCharactersToProjects())
     app.migrations.add(SessionRecord.migration)
     try await app.autoMigrate()
+    app.lifecycle.use(ScanShutdownHandler())
 
     try await seedReferenceDataIfNeeded(app)
 

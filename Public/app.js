@@ -32,6 +32,8 @@ const state = {
   // and "printed" stay expanded since they're short.
   collapsedGroups: new Set(["types", "category", "material", "tag"]),
   searchText: "",
+  selectMode: false,      // grid "Sélectionner" mode (batch tag/character edits)
+  batch: new Set(),       // project ids ticked in select mode
   selectedId: null,       // open project id (view === "project")
   settingsTab: "library",
 };
@@ -345,7 +347,17 @@ async function softRefresh() {
   softRefreshRunning = true;
   try {
     const changedId = state.liveChangedProjectId;
+    const pendingBefore = state.projects.filter((p) => p.sourceScrapeStatus === "pending");
     await loadLibrary();
+    for (const before of pendingBefore) {
+      const now = state.projects.find((p) => p.id === before.id);
+      if (!now || now.sourceScrapeStatus === "pending") continue;
+      if (now.sourceScrapeStatus === "failed") {
+        showToast(`Scraping échoué — ${now.name} : ${now.sourceScrapeError || "erreur inconnue"}`, { kind: "err", href: `#/project/${now.id}`, ms: 12000 });
+      } else {
+        showToast(`Scraping terminé — ${now.name}`, { kind: "ok", href: `#/project/${now.id}` });
+      }
+    }
     state.fileListCache = {};
     renderSidebar();
     if (state.view === "grid") {
@@ -888,15 +900,50 @@ function showGrid(opts = {}) {
 
 const scrollByHash = {};
 
+// Grid hashes carry the active filters and search, e.g.
+//   #/?creator=Yosh+Studios&tag=Halloween&q=pikachu   or   #/?view=todo
 function isGridHash() {
-  return !location.hash || location.hash === "#" || location.hash === "#/";
+  const h = location.hash;
+  return !h || h === "#" || h === "#/" || h.startsWith("#/?");
+}
+
+function gridHashFromState() {
+  const params = new URLSearchParams();
+  const f = state.filter;
+  if (f.type === "todo" || f.type === "shopifyOrphans" || f.type === "shopifyTasks") params.set("view", f.type);
+  else if (f.type === "kind") params.set("view", `kind:${f.value}`);
+  else for (const key of Object.keys(FILTER_FIELDS)) for (const v of state.selected[key]) params.append(key, v);
+  if (state.searchText) params.set("q", state.searchText);
+  const qs = params.toString();
+  return qs ? `#/?${qs}` : "#/";
+}
+
+function loadGridStateFromHash() {
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  clearAllMultiSelects();
+  const view = params.get("view");
+  if (view === "todo" || view === "shopifyOrphans" || view === "shopifyTasks") {
+    state.filter = { type: view };
+  } else if (view?.startsWith("kind:")) {
+    state.filter = { type: "kind", value: view.slice(5) };
+  } else {
+    for (const key of Object.keys(FILTER_FIELDS)) for (const v of params.getAll(key)) state.selected[key].add(v);
+    state.filter = anySelectionActive() ? { type: "filtered" } : { type: "all" };
+  }
+  state.searchText = params.get("q") || "";
+  document.getElementById("searchInput").value = state.searchText;
 }
 
 function goProject(id) { location.hash = `#/project/${id}`; }
 function goSettings(tab) { location.hash = tab ? `#/settings/${tab}` : "#/settings"; }
+// State is already updated by the caller (a filter was toggled…); this just
+// makes the URL say the same thing — which creates the history entry — and
+// the hashchange handler then renders it.
 function goGrid() {
-  if (isGridHash()) renderGridRoute();
-  else location.hash = "#/";
+  const target = gridHashFromState();
+  const current = location.hash || "#/";
+  if (current === target) renderGridRoute();
+  else location.hash = target;
 }
 
 function renderGridRoute() {
@@ -914,18 +961,27 @@ async function applyRoute() {
   const project = hash.match(/^#\/project\/([^/]+)/);
   const settings = hash.match(/^#\/settings(?:\/([^/]+))?/);
   if (project) {
+    exitSelectMode();
     await openProject(decodeURIComponent(project[1]));
     window.scrollTo(0, 0);
   } else if (settings) {
+    exitSelectMode();
     await openSettings(settings[1] && SETTINGS_TABS.some((t) => t.id === settings[1]) ? settings[1] : undefined);
     window.scrollTo(0, 0);
   } else {
+    loadGridStateFromHash();
     renderGridRoute();
     window.scrollTo(0, scrollByHash[hash] ?? 0);
   }
 }
 
 function renderGrid() {
+  if (!["all", "filtered"].includes(state.filter.type)) state.selectMode = false;
+  renderGridBody();
+  updateBatchBar();
+}
+
+function renderGridBody() {
   const detail = document.getElementById("detail");
   setDetailWide(true);
 
@@ -986,6 +1042,7 @@ function renderGrid() {
       <div class="grid-section-header">
         <div class="grid-section-title">${escapeHtml(title)}</div>
         <div class="grid-section-count">${results.length}</div>
+        <button class="btn btn-sm" id="btnSelectMode" style="margin-left:auto">${state.selectMode ? "✕ Terminer" : "☑️ Sélectionner"}</button>
       </div>
       ${results.length === 0
         ? `<div class="empty">Aucun résultat</div>`
@@ -995,6 +1052,143 @@ function renderGrid() {
   detail.innerHTML = sectionsHtml;
   wireGridCardClicks(detail);
   wireHScrollCardClicks(detail);
+  document.getElementById("btnSelectMode")?.addEventListener("click", () => {
+    if (state.selectMode) exitSelectMode();
+    else state.selectMode = true;
+    renderGrid();
+  });
+}
+
+// ── Batch selection (tags / characters on several projects at once) ──
+
+function exitSelectMode() {
+  state.selectMode = false;
+  state.batch.clear();
+  updateBatchBar();
+}
+
+function visibleProjectIds() {
+  const base = state.filter.type === "filtered" ? projectsMatchingAllSelected() : state.projects;
+  return applySearch(base).map((p) => p.id);
+}
+
+function toggleBatch(id) {
+  if (state.batch.has(id)) state.batch.delete(id);
+  else state.batch.add(id);
+  const on = state.batch.has(id);
+  document.querySelectorAll(`.project-card[data-open="${id}"]`).forEach((card) => {
+    card.classList.toggle("selected", on);
+    const check = card.querySelector(".card-check");
+    if (check) check.textContent = on ? "✓" : "";
+  });
+  updateBatchBar();
+}
+
+const BATCH_ACTIONS = {
+  addTag:          { title: "Ajouter un tag",          field: "addTags",          source: "tags",       fromSelection: false, label: "＋ 🏷️ Tag" },
+  addCharacter:    { title: "Ajouter un personnage",   field: "addCharacters",    source: "characters", fromSelection: false, label: "＋ 🎭 Personnage" },
+  removeTag:       { title: "Retirer un tag",          field: "removeTags",       source: "tags",       fromSelection: true,  label: "− 🏷️ Tag" },
+  removeCharacter: { title: "Retirer un personnage",   field: "removeCharacters", source: "characters", fromSelection: true,  label: "− 🎭 Personnage" },
+};
+
+function updateBatchBar() {
+  let bar = document.getElementById("batchBar");
+  if (!(state.view === "grid" && state.selectMode)) { bar?.remove(); return; }
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "batchBar";
+    bar.className = "batch-bar";
+    bar.addEventListener("click", (evt) => {
+      const btn = evt.target.closest("[data-batch]");
+      if (!btn || btn.disabled) return;
+      const action = btn.dataset.batch;
+      if (action === "all") { visibleProjectIds().forEach((id) => state.batch.add(id)); renderGrid(); }
+      else if (action === "none") { state.batch.clear(); renderGrid(); }
+      else openBatchModal(action);
+    });
+    document.body.appendChild(bar);
+  }
+  const n = state.batch.size;
+  bar.innerHTML = `
+    <span class="batch-count">${n} sélectionné${n > 1 ? "s" : ""}</span>
+    <button class="btn btn-sm" data-batch="all">Tout sélectionner (${visibleProjectIds().length})</button>
+    <button class="btn btn-sm" data-batch="none" ${n ? "" : "disabled"}>Aucun</button>
+    <span class="batch-sep"></span>
+    ${Object.entries(BATCH_ACTIONS).map(([key, a]) => `<button class="btn btn-sm btn-primary" data-batch="${key}" ${n ? "" : "disabled"}>${a.label}</button>`).join("")}`;
+}
+
+function openBatchModal(actionKey) {
+  const action = BATCH_ACTIONS[actionKey];
+  const selected = state.projects.filter((p) => state.batch.has(p.id));
+  const pool = action.fromSelection ? selected : state.projects;
+  const suggestions = [...new Set(pool.flatMap((p) => p[action.source] || []))].sort((a, b) => a.localeCompare(b, "fr"));
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal">
+      <h2>${action.title}</h2>
+      <p class="hint" style="margin:0 0 10px">${selected.length} projet${selected.length > 1 ? "s" : ""} concerné${selected.length > 1 ? "s" : ""}.</p>
+      <div class="field">
+        <input id="batchValueInput" list="batchValueList" autocomplete="off" placeholder="${action.source === "tags" ? "Tag…" : "Personnage…"}" />
+        <datalist id="batchValueList">${suggestions.map((v) => `<option value="${escapeHtml(v)}"></option>`).join("")}</datalist>
+      </div>
+      <div id="batchModalMessage"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-sm" id="btnBatchCancel">Annuler</button>
+        <button type="button" class="btn btn-primary btn-sm" id="btnBatchConfirm">Appliquer</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const input = document.getElementById("batchValueInput");
+  input.focus();
+
+  const close = () => overlay.remove();
+  const confirm = async () => {
+    const value = input.value.trim();
+    if (!value) return;
+    const msg = document.getElementById("batchModalMessage");
+    try {
+      const res = await api("/api/projects/batch-update", {
+        method: "POST",
+        body: JSON.stringify({ ids: [...state.batch], [action.field]: [value] }),
+      });
+      close();
+      await loadLibrary();
+      renderSidebar();
+      renderGrid();
+      showToast(res.updated === 0
+        ? "Rien à modifier : tous les projets étaient déjà à jour."
+        : `${action.title} « ${value} » — ${res.updated} projet${res.updated > 1 ? "s" : ""} modifié${res.updated > 1 ? "s" : ""}.`, { kind: "ok" });
+    } catch (e) {
+      msg.innerHTML = `<div class="message err">Échec : ${escapeHtml(e.message)}</div>`;
+    }
+  };
+  document.getElementById("btnBatchCancel").addEventListener("click", close);
+  document.getElementById("btnBatchConfirm").addEventListener("click", confirm);
+  overlay.addEventListener("click", (evt) => { if (evt.target === overlay) close(); });
+  input.addEventListener("keydown", (evt) => {
+    if (evt.key === "Enter") confirm();
+    if (evt.key === "Escape") close();
+  });
+}
+
+// ── Toasts ──
+
+function showToast(text, { kind = "info", href = null, ms = 7000 } = {}) {
+  let box = document.getElementById("toastBox");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "toastBox";
+    document.body.appendChild(box);
+  }
+  const toast = document.createElement(href ? "a" : "div");
+  toast.className = `toast ${kind}`;
+  toast.textContent = text;
+  if (href) toast.href = href;
+  toast.addEventListener("click", () => toast.remove());
+  box.appendChild(toast);
+  setTimeout(() => toast.remove(), ms);
 }
 
 function renderTodoView(detail) {
@@ -1290,14 +1484,17 @@ function projectCardHtml(project, opts = {}) {
   const shownTags = tags.slice(0, 6);
   const hiddenCount = tags.length - shownTags.length;
 
+  const selectable = state.selectMode && opts.missing !== true;
+  const picked = selectable && state.batch.has(project.id);
   return `
-    <div class="project-card" data-open="${project.id}">
+    <div class="project-card${selectable ? " selectable" : ""}${picked ? " selected" : ""}" data-open="${project.id}">
       <div class="cover">
+        ${selectable ? `<div class="card-check">${picked ? "✓" : ""}</div>` : ""}
         ${coverUrl
           ? `<img src="${coverUrl}" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'cover-placeholder',textContent:'🧊'}))" />`
           : `<div class="cover-placeholder">🧊</div>`}
         ${product ? `<div class="shopify-badge"><span class="dot ${product.status === "active" ? "on" : "off"}"></span>${escapeHtml(SHOPIFY_STATUS_LABEL[product.status] || product.status)}</div>` : ""}
-        ${printedBadgeHtml(Boolean(project.alreadyPrinted))}
+        ${selectable ? "" : printedBadgeHtml(Boolean(project.alreadyPrinted))}
         ${opts.missing ? `<div class="missing-chips">${missingMetadataLabels(project).map((m) => `<span class="missing-chip">${escapeHtml(m)}</span>`).join("")}</div>` : ""}
       </div>
       <div class="card-body">
@@ -1346,6 +1543,7 @@ async function toggleAlreadyPrinted(projectId) {
 function wireGridCardClicks(container) {
   container.querySelectorAll("[data-open]").forEach((el) => {
     el.addEventListener("click", (evt) => {
+      if (state.selectMode) { toggleBatch(el.dataset.open); return; }
       if (evt.target.closest(".printed-badge")) {
         evt.stopPropagation();
         toggleAlreadyPrinted(el.dataset.open);
@@ -1998,9 +2196,9 @@ function sourceSectionHtml(project) {
     </div>`;
 }
 
-// Pastes the URL + clicks "Lancer/Relancer le scraping": marks the project
-// pending (optimistic re-render) and PATCHes the same, for the relay running
-// on the user's own machine (forgecore-scraper/relay.js) to pick up.
+// Pasted URL (or "Lancer/Relancer le scraping"): marks the project pending
+// (optimistic re-render) and PATCHes the same, for the scraper sidecar
+// container (scraper/relay.js) to pick up.
 async function launchSourceScrape(project, url) {
   const trimmed = (url || "").trim();
   if (!trimmed) { alert("Colle d'abord le lien vers la fiche d'origine."); return; }
@@ -2050,6 +2248,18 @@ function wireSourceSection(project) {
   const urlInput = document.getElementById("detailSourceUrlInput");
   const scrapeBtn = document.getElementById("btnSourceScrape");
   scrapeBtn?.addEventListener("click", () => launchSourceScrape(project, urlInput?.value));
+  // Pasting a link to a supported site starts the scrape right away — no
+  // separate click needed. (Unsupported sites still go through the button, so
+  // the "site non pris en charge" message stays reachable.)
+  urlInput?.addEventListener("paste", () => setTimeout(() => {
+    const value = urlInput.value.trim();
+    if (value !== project.sourceUrl && /^https?:\/\//i.test(value) && sourcePresetForUrl(value)) {
+      launchSourceScrape(project, value);
+    }
+  }, 0));
+  urlInput?.addEventListener("keydown", (evt) => {
+    if (evt.key === "Enter") launchSourceScrape(project, urlInput.value);
+  });
 
   // The weight/print-time fields only exist once a scrape has actually
   // produced a full section — the pre-import minimal form has none of these.
@@ -3748,7 +3958,11 @@ async function boot() {
   document.getElementById("sidebarBackdrop").addEventListener("click", closeMobileSidebar);
   document.getElementById("searchInput").addEventListener("input", (evt) => {
     state.searchText = evt.target.value;
-    if (state.view === "grid") renderGrid();
+    if (state.view === "grid") {
+      renderGrid();
+      history.replaceState(null, "", gridHashFromState()); // typing shouldn't create a history entry per keystroke
+      lastRenderedHash = location.hash;
+    }
   });
   wireSidebarEvents();
 
