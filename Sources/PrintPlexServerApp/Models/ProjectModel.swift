@@ -108,7 +108,7 @@ final class ProjectModel: Model, @unchecked Sendable {
     /// they're plain `renderImage`-role files on disk like any photo, but
     /// showing up as the auto-picked cover or inflating the "N photos" count
     /// on a grid card would be wrong; they belong only in their own section.
-    func coverAndCounts(from files: [FileModel]) -> (coverFileId: UUID?, partsCount: Int, totalFileCount: Int, imageCount: Int) {
+    func coverAndCounts(from files: [FileSummary]) -> (coverFileId: UUID?, partsCount: Int, totalFileCount: Int, imageCount: Int) {
         let instructionNames = Set(sourceInstructionImages ?? [])
         let images = files.filter {
             $0.fileRoleRaw == FileRole.renderImage.rawValue
@@ -128,8 +128,8 @@ final class ProjectModel: Model, @unchecked Sendable {
     /// True once at least one file's real print data (the "Impression
     /// réelle" block) has been recorded — backs the "Estimé manuellement"
     /// sidebar filter.
-    func hasManualEstimate(from files: [FileModel]) -> Bool {
-        files.contains { $0.printParams?.actualPrintTimeSec != nil || $0.printParams?.actualFilamentGrams != nil }
+    func hasManualEstimate(from files: [FileSummary]) -> Bool {
+        files.contains { $0.hasManualEstimate }
     }
 
     /// `source_instruction_images` entries from the ForgeCore relay/import.js
@@ -139,11 +139,31 @@ final class ProjectModel: Model, @unchecked Sendable {
     /// path from a `FileModel`'s absolute `path` so the two can be compared.
     /// Falls back to the bare filename for older imports that predate the
     /// subfolder convention.
-    private func relativePath(of file: FileModel) -> String {
+    private func relativePath(of file: FileSummary) -> String {
         let prefix = folderPath + "/"
         guard file.path.hasPrefix(prefix) else {
             return "\(file.fileName).\(file.fileExtension)"
         }
         return String(file.path.dropFirst(prefix.count))
+    }
+}
+
+/// The handful of file columns the project list needs (cover pick, counts,
+/// "manual estimate" flag). Lets the index be built from a narrow SQL query
+/// instead of decoding every full `FileModel` of the library.
+struct FileSummary: Sendable {
+    var id: UUID
+    var path: String
+    var fileName: String
+    var fileExtension: String
+    var fileRoleRaw: String
+    var hasManualEstimate: Bool
+}
+
+extension FileModel {
+    var summary: FileSummary {
+        FileSummary(id: id ?? UUID(), path: path, fileName: fileName, fileExtension: fileExtension,
+                    fileRoleRaw: fileRoleRaw,
+                    hasManualEstimate: printParams?.actualPrintTimeSec != nil || printParams?.actualFilamentGrams != nil)
     }
 }

@@ -1,5 +1,6 @@
 import Vapor
 import Fluent
+import FluentSQL
 import PrintPlexCore
 
 struct ProjectUpdateRequest: Content {
@@ -218,18 +219,45 @@ struct ProjectController: RouteCollection {
         // One query for every project's files (instead of one query per
         // project) so cover image + part/file counts stay cheap even with
         // many projects — the grid view needs these on every card.
-        let allProjectFiles = try await FileModel.query(on: db)
-            .filter(\.$project.$id != nil)
-            .all()
-        let filesByProject = Dictionary(grouping: allProjectFiles) { $0.$project.id! }
-
+        //
+        // Raw SQL on only the columns the cards need, not `FileModel.query`:
+        // decoding ~15k full models (mesh stats, per-plate JSON…) through
+        // Fluent took ~1s per call, and the dashboard re-reads this list on
+        // every live change.
+        let allFiles = try await Self.fileSummariesByProject(on: db)
         return models.map { model in
-            let files = filesByProject[model.id!] ?? []
+            let files = allFiles[model.id!] ?? []
             let (coverFileId, partsCount, totalFileCount, imageCount) = model.coverAndCounts(from: files)
             return model.toDTO(coverFileId: coverFileId, partsCount: partsCount,
                               totalFileCount: totalFileCount, imageCount: imageCount,
                               hasManualEstimate: model.hasManualEstimate(from: files))
         }
+    }
+
+    private struct FileSummaryRow: Decodable {
+        var id: UUID
+        var project_id: UUID
+        var path: String
+        var file_name: String
+        var file_extension: String
+        var file_role: String
+        var manual: Int
+    }
+
+    private static func fileSummariesByProject(on db: Database) async throws -> [UUID: [FileSummary]] {
+        guard let sql = db as? SQLDatabase else { throw Abort(.internalServerError, reason: "Base SQL requise") }
+        let rows = try await sql.raw("""
+            SELECT id, project_id, path, file_name, file_extension, file_role,
+                   CASE WHEN json_extract(print_params, '$.actualPrintTimeSec') IS NOT NULL
+                          OR json_extract(print_params, '$.actualFilamentGrams') IS NOT NULL
+                        THEN 1 ELSE 0 END AS manual
+            FROM files WHERE project_id IS NOT NULL
+            """).all(decoding: FileSummaryRow.self)
+        return Dictionary(grouping: rows.map {
+            ($0.project_id, FileSummary(id: $0.id, path: $0.path, fileName: $0.file_name,
+                                        fileExtension: $0.file_extension, fileRoleRaw: $0.file_role,
+                                        hasManualEstimate: $0.manual != 0))
+        }, by: { $0.0 }).mapValues { $0.map(\.1) }
     }
 
     static func fetchIndexPage(query: ProjectListQuery, on db: Database) async throws -> ProjectListPage {
@@ -280,10 +308,11 @@ struct ProjectController: RouteCollection {
             .filter(\.$project.$id == model.requireID())
             .sort(\.$fileName)
             .all()
-        let (coverFileId, partsCount, totalFileCount, imageCount) = model.coverAndCounts(from: files)
+        let summaries = files.map(\.summary)
+        let (coverFileId, partsCount, totalFileCount, imageCount) = model.coverAndCounts(from: summaries)
         return model.toDTO(files: files.map { $0.toDTO() }, coverFileId: coverFileId,
                           partsCount: partsCount, totalFileCount: totalFileCount, imageCount: imageCount,
-                          hasManualEstimate: model.hasManualEstimate(from: files))
+                          hasManualEstimate: model.hasManualEstimate(from: summaries))
     }
 
     /// Updates project metadata in the DB **and** in the folder's info.json,

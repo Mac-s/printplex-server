@@ -323,8 +323,14 @@ let softRefreshRunning = false;
 let softRefreshAgain = false;
 let scanRefreshTimer = null;
 
+// Projects named by "libraryChanged" events since the last refresh; an event
+// that names none (a scan, a reconnect…) means "re-read everything".
+const pendingChangedIds = new Set();
+let pendingFullReload = false;
+
 function scheduleSoftRefresh(changedProjectId) {
-  state.liveChangedProjectId = changedProjectId ?? null;
+  if (changedProjectId) pendingChangedIds.add(changedProjectId.toLowerCase());
+  else pendingFullReload = true;
   clearTimeout(softRefreshTimer);
   softRefreshTimer = setTimeout(softRefresh, 400);
 }
@@ -334,6 +340,24 @@ function scheduleSoftRefresh(changedProjectId) {
 function scheduleScanRefresh() {
   if (scanRefreshTimer) return;
   scanRefreshTimer = setTimeout(() => { scanRefreshTimer = null; scheduleSoftRefresh(); }, 4000);
+}
+
+/// Re-reads just the projects an event named (one small request each) and
+/// swaps them into `state.projects`, instead of re-downloading the whole list.
+/// Falls back to the full reload if any of them can't be fetched (deleted…).
+async function refreshChangedProjects(ids) {
+  try {
+    const fresh = await Promise.all(ids.map((id) => api(`/api/projects/${id}`)));
+    for (const project of fresh) {
+      delete project.files; // list entries never carry files
+      const index = state.projects.findIndex((p) => p.id.toLowerCase() === project.id.toLowerCase());
+      if (index >= 0) state.projects[index] = project;
+      else state.projects.unshift(project);
+    }
+    state.fileListCache = {};
+  } catch (_) {
+    await loadLibrary({ shopify: false });
+  }
 }
 
 function isUserEditing() {
@@ -346,9 +370,15 @@ async function softRefresh() {
   if (softRefreshRunning) { softRefreshAgain = true; return; }
   softRefreshRunning = true;
   try {
-    const changedId = state.liveChangedProjectId;
+    const changedIds = [...pendingChangedIds];
+    // Many changed projects (e.g. a batch edit) is cheaper as one list call.
+    const fullReload = pendingFullReload || changedIds.length === 0 || changedIds.length > 8;
+    pendingChangedIds.clear();
+    pendingFullReload = false;
+
     const pendingBefore = state.projects.filter((p) => p.sourceScrapeStatus === "pending");
-    await loadLibrary();
+    if (fullReload) await loadLibrary({ shopify: false });
+    else await refreshChangedProjects(changedIds);
     for (const before of pendingBefore) {
       const now = state.projects.find((p) => p.id === before.id);
       if (!now || now.sourceScrapeStatus === "pending") continue;
@@ -365,7 +395,7 @@ async function softRefresh() {
       renderGrid();
       window.scrollTo(0, y);
     } else if (state.view === "project" && state.selectedId
-               && (!changedId || changedId.toLowerCase() === state.selectedId.toLowerCase())
+               && (fullReload || changedIds.includes(state.selectedId.toLowerCase()))
                && !isUserEditing() && Date.now() - lastLocalWrite > 2500) {
       await openProject(state.selectedId, { quiet: true });
     }
@@ -392,7 +422,9 @@ async function onLibraryChanged() {
 
 // ───────────────────────── Data loading ─────────────────────────
 
-async function loadLibrary() {
+// `shopify: false` keeps the Shopify product list already in memory instead
+// of re-downloading it (it's large, and only changes on an explicit sync).
+async function loadLibrary({ shopify = true } = {}) {
   const [projects, unsorted, fileStats, overview] = await Promise.all([
     api("/api/projects"), api("/api/files/unsorted"), api("/api/files/stats"), api("/api/settings"),
   ]);
@@ -404,7 +436,9 @@ async function loadLibrary() {
   state.shopifyStoreDomain = overview.shopifyStoreDomain;
   // Only fetch the product list once a sync has actually happened — otherwise
   // this GET would trigger a *lazy* first sync just from opening the dashboard.
-  if (overview.shopifyConfigured && overview.shopifyLastSyncDate) {
+  if (!shopify && overview.shopifyConfigured && overview.shopifyLastSyncDate) {
+    // keep state.shopifyProducts as is
+  } else if (overview.shopifyConfigured && overview.shopifyLastSyncDate) {
     try { state.shopifyProducts = await api("/api/shopify/products"); }
     catch (_) { state.shopifyProducts = []; }
   } else {

@@ -141,7 +141,7 @@ struct ForgeCoreController: RouteCollection {
         let files = try await FileModel.query(on: db)
             .filter(\.$project.$id == refreshed.requireID())
             .all()
-        let (coverFileId, partsCount, totalFileCount, imageCount) = refreshed.coverAndCounts(from: files)
+        let (coverFileId, partsCount, totalFileCount, imageCount) = refreshed.coverAndCounts(from: files.map(\.summary))
         return refreshed.toDTO(coverFileId: coverFileId, partsCount: partsCount,
                                totalFileCount: totalFileCount, imageCount: imageCount)
     }
